@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment files — NEVER commit real credentials
+.env
+**/.env
+server/.env
+
+# Build output
+dist/
+**/dist/
+client/dist/
+infra/dist/
+
+# CDK
+infra/cdk.out/
+infra/outputs.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store

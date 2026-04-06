@@ -1,0 +1,27 @@
+{
+  "name": "infra",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "bootstrap": "cdk bootstrap",
+    "deploy": "cdk deploy",
+    "destroy": "cdk destroy",
+    "diff": "cdk diff",
+    "synth": "cdk synth",
+    "setup": "bash ../scripts/setup-github-secrets.sh"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "aws-cdk-lib": "^2.248.0",
+    "constructs": "^10.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "aws-cdk": "^2.1117.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2"
+  }
+}
