@@ -76,18 +76,41 @@ export class VanishDropStack extends cdk.Stack {
       'npm install -g pm2',
       'env PATH=$PATH:/usr/bin pm2 startup systemd -u ec2-user --hp /home/ec2-user',
       'dnf install -y nginx',
+      `cat > /etc/nginx/nginx.conf << 'EOF'
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log;
+pid /run/nginx.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    access_log /var/log/nginx/access.log;
+    sendfile on;
+    keepalive_timeout 65;
+    include /etc/nginx/conf.d/*.conf;
+}
+EOF`,
       `cat > /etc/nginx/conf.d/vanishdrop.conf << 'EOF'
 server {
-    listen 80;
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
     client_max_body_size 110m;
+
     location / {
-        proxy_pass http://localhost:3001;
+        proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection upgrade;
     }
 }
 EOF`,

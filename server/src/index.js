@@ -16,6 +16,7 @@ const { setIo, cleanupOrphanedSessions } = require('./services/cleanup');
 
 const app = express();
 const server = http.createServer(app);
+const clientDistPath = path.resolve(__dirname, '../../client/dist');
 
 const io = new Server(server, {
   cors: {
@@ -42,6 +43,15 @@ app.use('/api/upload', uploadRoutes);
 app.use('/api/files', filesRoutes);
 app.use('/api/health', healthRoutes);
 
+app.use(express.static(clientDistPath));
+
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
+    return next();
+  }
+
+  return res.sendFile(path.join(clientDistPath, 'index.html'));
+});
 
 registerPresenceHandlers(io);
 

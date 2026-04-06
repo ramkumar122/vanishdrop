@@ -7,13 +7,19 @@ const {
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const config = require('../config');
 
-const s3 = new S3Client({
+const s3Config = {
   region: config.s3.region,
-  credentials: {
+};
+
+// Prefer the EC2 IAM role in production. Only inject static credentials when both are explicitly set.
+if (config.s3.accessKeyId && config.s3.secretAccessKey) {
+  s3Config.credentials = {
     accessKeyId: config.s3.accessKeyId,
     secretAccessKey: config.s3.secretAccessKey,
-  },
-});
+  };
+}
+
+const s3 = new S3Client(s3Config);
 
 async function generateUploadUrl(storageKey, mimeType, fileSize) {
   const command = new PutObjectCommand({

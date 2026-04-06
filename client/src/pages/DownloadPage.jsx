@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket.js';
 import FileInfo from '../components/FileInfo.jsx';
-import { getFileInfo, getDownloadUrl } from '../lib/api.js';
+import { completeDownload, getFileInfo, getDownloadUrl } from '../lib/api.js';
 
 // loadState: 'loading' | 'available' | 'downloading' | 'vanished' | 'notfound'
 
@@ -67,13 +67,18 @@ export default function DownloadPage() {
   async function handleDownload() {
     try {
       setLoadState('downloading');
-      const { downloadUrl } = await getDownloadUrl(fileId);
+      const { downloadUrl, downloadId } = await getDownloadUrl(fileId);
       const a = document.createElement('a');
       a.href = downloadUrl;
       a.download = fileInfo?.fileName || 'download';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+
+      window.setTimeout(() => {
+        completeDownload(fileId, downloadId).catch(() => {});
+      }, 5000);
+
       setLoadState('available');
     } catch {
       setLoadState('vanished');

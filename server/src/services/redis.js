@@ -119,13 +119,17 @@ async function deleteSession(sessionId) {
 
 async function createActiveDownload(fileId, downloadId) {
   const key = `download:${fileId}:${downloadId}`;
-  await redis.set(key, 'active', 'EX', 300);
+  await redis.set(key, 'active', 'EX', 90);
 }
 
 async function getActiveDownloads(fileId) {
   const pattern = `download:${fileId}:*`;
   const keys = await redis.keys(pattern);
   return keys;
+}
+
+async function clearActiveDownload(fileId, downloadId) {
+  await redis.del(`download:${fileId}:${downloadId}`);
 }
 
 async function scanOrphanedSessions() {
@@ -162,5 +166,6 @@ module.exports = {
   deleteSession,
   createActiveDownload,
   getActiveDownloads,
+  clearActiveDownload,
   scanOrphanedSessions,
 };

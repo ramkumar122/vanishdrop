@@ -1,6 +1,6 @@
 const express = require('express');
 const { nanoid } = require('nanoid');
-const { getFile, getSession, createActiveDownload } = require('../services/redis');
+const { getFile, getSession, createActiveDownload, clearActiveDownload } = require('../services/redis');
 const { generateDownloadUrl } = require('../services/storage');
 
 const router = express.Router();
@@ -69,9 +69,28 @@ router.get('/:fileId/download', async (req, res) => {
       io.to(`session:${file.sessionId}`).emit('file:download-started', { fileId, downloadId });
     }
 
-    res.json({ downloadUrl, fileName: file.fileName });
+    res.json({ downloadUrl, fileName: file.fileName, downloadId });
   } catch (err) {
     console.error('[Files] Error generating download URL:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/:fileId/download/:downloadId/complete', async (req, res) => {
+  const { fileId, downloadId } = req.params;
+
+  try {
+    const file = await getFile(fileId);
+    await clearActiveDownload(fileId, downloadId);
+
+    const io = req.app.get('io');
+    if (io && file?.sessionId) {
+      io.to(`session:${file.sessionId}`).emit('file:download-completed', { fileId, downloadId });
+    }
+
+    res.json({ status: 'ok' });
+  } catch (err) {
+    console.error('[Files] Error completing download:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

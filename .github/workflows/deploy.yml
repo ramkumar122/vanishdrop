@@ -22,8 +22,11 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Install server dependencies
-        run: npm install --workspace=server
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build client
+        run: npm run build --workspace=client
 
       - name: Write server .env from GitHub Secrets
         run: |
@@ -47,7 +50,7 @@ jobs:
 
       - name: Package and upload to S3
         run: |
-          zip -r deploy.zip server/ --exclude "server/node_modules/*" --exclude "*.git*"
+          zip -r deploy.zip server/ client/dist/ --exclude "server/node_modules/*" --exclude "server/.env" --exclude "*.git*"
           aws s3 cp deploy.zip s3://${{ secrets.DEPLOY_BUCKET }}/deploy-${{ github.sha }}.zip
 
       - name: Deploy to EC2 via SSM
@@ -61,7 +64,7 @@ jobs:
               "unzip -o /tmp/deploy.zip -d /home/ec2-user/vanishdrop",
               "chown -R ec2-user:ec2-user /home/ec2-user/vanishdrop",
               "cd /home/ec2-user/vanishdrop/server && npm install --omit=dev",
-              "su - ec2-user -c \"pm2 describe vanishdrop > /dev/null 2>&1 && pm2 restart vanishdrop || pm2 start /home/ec2-user/vanishdrop/server/src/index.js --name vanishdrop\"",
+              "su - ec2-user -c \"cd /home/ec2-user/vanishdrop/server && pm2 startOrRestart ecosystem.config.cjs --update-env\"",
               "su - ec2-user -c \"pm2 save\""
             ]' \
             --query "Command.CommandId" \

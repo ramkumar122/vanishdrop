@@ -27,6 +27,11 @@ export async function getDownloadUrl(fileId) {
   return data;
 }
 
+export async function completeDownload(fileId, downloadId) {
+  const { data } = await api.post(`/files/${fileId}/download/${downloadId}/complete`);
+  return data;
+}
+
 export async function uploadToS3(uploadUrl, file, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
