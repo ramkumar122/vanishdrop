@@ -15,7 +15,7 @@ const EXPIRY_OPTIONS = [
 
 export default function HomePage() {
   const navigate = useNavigate();
-  const { sessionId, connected, emit } = useSocket();
+  const { sessionId, connected, sessionReady, emit } = useSocket();
   const {
     upload,
     reset,
@@ -38,6 +38,7 @@ export default function HomePage() {
   }, [uploadStatus, fileId, navigate]);
 
   const isUploading = uploadStatus === 'uploading' || uploadStatus === 'completing';
+  const uploadReady = connected && sessionReady;
 
   return (
     <div className="w-full max-w-lg animate-fade-in">
@@ -58,7 +59,7 @@ export default function HomePage() {
           />
         ) : (
           <>
-            <DropZone onFile={(file) => upload(file, expiryMode)} disabled={!connected} />
+            <DropZone onFile={(file) => upload(file, expiryMode)} disabled={!uploadReady} />
 
             <div>
               <p className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">
@@ -93,8 +94,10 @@ export default function HomePage() {
           </div>
         )}
 
-        {!connected && (
-          <p className="text-yellow-500 text-xs text-center">Connecting to server…</p>
+        {!uploadReady && (
+          <p className="text-yellow-500 text-xs text-center">
+            {connected ? 'Preparing secure session…' : 'Connecting to server…'}
+          </p>
         )}
       </div>
 

@@ -6,6 +6,7 @@ export function useSocket() {
   const socketRef = useRef(null);
   const [sessionId, setSessionId] = useState(getOrCreateSessionId());
   const [connected, setConnected] = useState(false);
+  const [sessionReady, setSessionReady] = useState(false);
   const [status, setStatus] = useState('disconnected'); // 'connected' | 'reconnecting' | 'disconnected'
 
   useEffect(() => {
@@ -28,10 +29,12 @@ export function useSocket() {
 
     socket.on('disconnect', () => {
       setConnected(false);
+      setSessionReady(false);
       setStatus('reconnecting');
     });
 
     socket.on('connect_error', () => {
+      setSessionReady(false);
       setStatus('disconnected');
     });
 
@@ -43,6 +46,7 @@ export function useSocket() {
     socket.on('session:created', ({ sessionId: newId }) => {
       saveSessionId(newId);
       setSessionId(newId);
+      setSessionReady(true);
     });
 
     return () => {
@@ -63,5 +67,5 @@ export function useSocket() {
     socketRef.current?.emit('file:join', room);
   }, []);
 
-  return { socket: socketRef.current, sessionId, connected, status, on, emit, joinRoom };
+  return { socket: socketRef.current, sessionId, connected, sessionReady, status, on, emit, joinRoom };
 }
