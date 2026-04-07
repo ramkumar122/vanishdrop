@@ -17,6 +17,8 @@ const { setIo, cleanupOrphanedSessions } = require('./services/cleanup');
 const app = express();
 const server = http.createServer(app);
 const clientDistPath = path.resolve(__dirname, '../../client/dist');
+const socketOrigin = config.corsOrigin.replace(/^http/, 'ws');
+const s3UploadOrigin = `https://${config.s3.bucket}.s3.${config.s3.region}.amazonaws.com`;
 
 const io = new Server(server, {
   cors: {
@@ -34,7 +36,27 @@ setIo(io);
 // Trust nginx reverse proxy so req.ip is the real client IP (for rate limiting)
 app.set('trust proxy', 1);
 
-app.use(helmet({ crossOriginResourcePolicy: false }));
+app.use(
+  helmet({
+    crossOriginResourcePolicy: false,
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        baseUri: ["'self'"],
+        fontSrc: ["'self'", 'https:', 'data:'],
+        formAction: ["'self'"],
+        frameAncestors: ["'self'"],
+        imgSrc: ["'self'", 'data:'],
+        objectSrc: ["'none'"],
+        scriptSrc: ["'self'"],
+        scriptSrcAttr: ["'none'"],
+        styleSrc: ["'self'", 'https:', "'unsafe-inline'"],
+        connectSrc: ["'self'", config.corsOrigin, socketOrigin, s3UploadOrigin],
+        upgradeInsecureRequests: [],
+      },
+    },
+  })
+);
 app.use(compression());
 app.use(cors({ origin: config.corsOrigin }));
 app.use(express.json());
