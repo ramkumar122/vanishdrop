@@ -25,6 +25,32 @@ function scheduleGrace(sessionId, io) {
   cancelGrace(sessionId);
   const handle = setTimeout(async () => {
     graceTimers.delete(sessionId);
+
+    const session = await getSession(sessionId);
+    if (!session) {
+      console.log(`[Presence] Grace period expired for missing session ${sessionId}`);
+      return;
+    }
+
+    if (session.connectedTabs > 0) {
+      await removeSessionExpiry(sessionId);
+      console.log(`[Presence] Grace expired but session ${sessionId} is active again, skipping cleanup`);
+      return;
+    }
+
+    const lastSeen = new Date(session.lastSeen);
+    const ageSeconds = Math.floor((Date.now() - lastSeen.getTime()) / 1000);
+    const recentActivityWindow = config.limits.sessionGracePeriod + 5;
+
+    if (ageSeconds <= recentActivityWindow) {
+      await setSessionExpiry(sessionId, config.limits.sessionGracePeriod + 5);
+      console.log(
+        `[Presence] Grace expired for session ${sessionId}, but lastSeen is recent (${ageSeconds}s). Extending grace.`
+      );
+      scheduleGrace(sessionId, io);
+      return;
+    }
+
     console.log(`[Presence] Grace period expired for session ${sessionId}`);
     await cleanupSession(sessionId);
   }, config.limits.sessionGracePeriod * 1000);

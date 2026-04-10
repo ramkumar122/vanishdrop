@@ -37,9 +37,10 @@ function ExpiryBadge({ expiryMode, expiresAt }) {
 
 export default function SharePage() {
   const { fileId } = useParams();
-  const { connected, status, on, emit } = useSocket();
+  const { connected, status, on, emit, joinRoom } = useSocket();
   const [fileInfo, setFileInfo] = useState(null);
   const [events, setEvents] = useState([]);
+  const [isDeleted, setIsDeleted] = useState(false);
 
   usePresence(emit, connected);
 
@@ -57,11 +58,21 @@ export default function SharePage() {
 
   useEffect(() => {
     getFileInfo(fileId)
-      .then(setFileInfo)
+      .then((data) => {
+        setFileInfo(data);
+        setIsDeleted(false);
+      })
       .catch(() => setFileInfo(null));
   }, [fileId]);
 
   useEffect(() => {
+    joinRoom(fileId);
+
+    const offDeleted = on('file:deleted', ({ fileId: fid }) => {
+      if (fid === fileId) {
+        setIsDeleted(true);
+      }
+    });
     const offStarted = on('file:download-started', ({ fileId: fid }) => {
       if (fid === fileId) {
         setEvents((prev) => [{ type: 'started', at: new Date() }, ...prev].slice(0, 10));
@@ -73,10 +84,26 @@ export default function SharePage() {
       }
     });
     return () => {
+      offDeleted?.();
       offStarted?.();
       offCompleted?.();
     };
-  }, [on, fileId]);
+  }, [on, fileId, joinRoom]);
+
+  if (isDeleted) {
+    return (
+      <div className="w-full max-w-lg animate-fade-in text-center">
+        <div className="text-6xl mb-4">💨</div>
+        <h2 className="text-2xl font-bold text-white mb-2">This file has vanished</h2>
+        <p className="text-gray-400 mb-6">
+          The shared file was deleted. The uploader disconnected or the timer expired.
+        </p>
+        <a href="/" className="text-indigo-400 hover:text-indigo-300 underline">
+          Share another file
+        </a>
+      </div>
+    );
+  }
 
   const shareUrl = `${window.location.origin}/d/${fileId}`;
   const isPresence = !fileInfo?.expiryMode || fileInfo.expiryMode === 'presence';
