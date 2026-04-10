@@ -3,6 +3,7 @@ const {
   PutObjectCommand,
   DeleteObjectCommand,
   HeadObjectCommand,
+  GetObjectCommand,
 } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const config = require('../config');
@@ -37,8 +38,6 @@ async function generateUploadUrl(storageKey, mimeType, fileSize) {
 }
 
 async function generateDownloadUrl(storageKey, fileName) {
-  const { GetObjectCommand } = require('@aws-sdk/client-s3');
-
   const command = new GetObjectCommand({
     Bucket: config.s3.bucket,
     Key: storageKey,
@@ -50,6 +49,21 @@ async function generateDownloadUrl(storageKey, fileName) {
   });
 
   return url;
+}
+
+async function getObjectStream(storageKey) {
+  const command = new GetObjectCommand({
+    Bucket: config.s3.bucket,
+    Key: storageKey,
+  });
+
+  const response = await s3.send(command);
+  return {
+    body: response.Body,
+    contentLength: response.ContentLength,
+    contentType: response.ContentType,
+    lastModified: response.LastModified,
+  };
 }
 
 async function deleteObject(storageKey) {
@@ -77,4 +91,4 @@ async function headObject(storageKey) {
   }
 }
 
-module.exports = { generateUploadUrl, generateDownloadUrl, deleteObject, headObject };
+module.exports = { generateUploadUrl, generateDownloadUrl, getObjectStream, deleteObject, headObject };

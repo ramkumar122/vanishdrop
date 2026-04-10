@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket.js';
 import FileInfo from '../components/FileInfo.jsx';
-import { completeDownload, getFileInfo, getDownloadUrl } from '../lib/api.js';
+import { downloadFile, getFileInfo } from '../lib/api.js';
 
 // loadState: 'loading' | 'available' | 'downloading' | 'vanished' | 'notfound'
 
@@ -44,14 +44,24 @@ export default function DownloadPage() {
   const { on, joinRoom } = useSocket();
   const [fileInfo, setFileInfo] = useState(null);
   const [loadState, setLoadState] = useState('loading');
+  const [vanishReason, setVanishReason] = useState(null);
+  const [downloadError, setDownloadError] = useState(null);
 
   useEffect(() => {
     getFileInfo(fileId)
       .then((data) => {
         setFileInfo(data);
         setLoadState('available');
+        setVanishReason(null);
       })
-      .catch(() => {
+      .catch((err) => {
+        const message = err.response?.data?.error;
+        if (err.response?.status === 410) {
+          setVanishReason(message || 'The person who shared this file set a timer and it has now expired.');
+          setLoadState('vanished');
+          return;
+        }
+
         setLoadState('notfound');
       });
   }, [fileId]);
@@ -59,7 +69,10 @@ export default function DownloadPage() {
   useEffect(() => {
     joinRoom(fileId);
     const off = on('file:deleted', ({ fileId: fid }) => {
-      if (fid === fileId) setLoadState('vanished');
+      if (fid === fileId) {
+        setVanishReason('The person who shared this file set a timer and it has now expired.');
+        setLoadState('vanished');
+      }
     });
     return () => off?.();
   }, [fileId, joinRoom, on]);
@@ -67,21 +80,19 @@ export default function DownloadPage() {
   async function handleDownload() {
     try {
       setLoadState('downloading');
-      const { downloadUrl, downloadId } = await getDownloadUrl(fileId);
-      const a = document.createElement('a');
-      a.href = downloadUrl;
-      a.download = fileInfo?.fileName || 'download';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-
-      window.setTimeout(() => {
-        completeDownload(fileId, downloadId).catch(() => {});
-      }, 5000);
-
+      setDownloadError(null);
+      await downloadFile(fileId, fileInfo?.fileName || 'download');
       setLoadState('available');
-    } catch {
-      setLoadState('vanished');
+    } catch (err) {
+      const message = err.message || 'Failed to download file';
+      if (message.toLowerCase().includes('expired') || message.toLowerCase().includes('closed their tab')) {
+        setVanishReason(message);
+        setLoadState('vanished');
+        return;
+      }
+
+      setDownloadError(message);
+      setLoadState('available');
     }
   }
 
@@ -103,7 +114,7 @@ export default function DownloadPage() {
         <h2 className="text-2xl font-bold text-white mb-2">This file has vanished</h2>
         <p className="text-gray-400 mb-6">
           {loadState === 'vanished'
-            ? 'The file was deleted. The timer expired or the uploader closed their tab.'
+            ? (vanishReason || 'The file was deleted. The timer expired or the uploader closed their tab.')
             : "The file you're looking for no longer exists. It may have expired or been deleted."}
         </p>
         <a href="/" className="text-indigo-400 hover:text-indigo-300 underline">
@@ -139,6 +150,10 @@ export default function DownloadPage() {
         >
           {loadState === 'downloading' ? 'Downloading…' : 'Download'}
         </button>
+
+        {downloadError && (
+          <p className="text-sm text-red-400 text-center">{downloadError}</p>
+        )}
 
         {fileInfo && (
           <ExpiryInfo expiryMode={fileInfo.expiryMode} expiresAt={fileInfo.expiresAt} />

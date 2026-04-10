@@ -1,20 +1,47 @@
 const express = require('express');
 const { nanoid } = require('nanoid');
-const { getFile, getSession, createActiveDownload, clearActiveDownload } = require('../services/redis');
-const { generateDownloadUrl } = require('../services/storage');
+const {
+  getFile,
+  getSession,
+  createActiveDownload,
+  clearActiveDownload,
+} = require('../services/redis');
+const { getObjectStream } = require('../services/storage');
+const { registerActiveDownload, unregisterActiveDownload } = require('../services/downloads');
 
 const router = express.Router();
 
-async function isFileAccessible(file) {
+function encodeDownloadFileName(fileName) {
+  return encodeURIComponent(fileName).replace(/['()]/g, escape).replace(/\*/g, '%2A');
+}
+
+async function getFileAccessState(file) {
   if (file.expiryMode && file.expiryMode !== 'presence') {
-    // Timed expiry — available until expiresAt regardless of uploader presence
-    if (!file.expiresAt) return false;
-    return new Date(file.expiresAt) > new Date();
+    if (!file.expiresAt) {
+      return { accessible: false, status: 410, error: 'This file is no longer available.' };
+    }
+
+    if (new Date(file.expiresAt) <= new Date()) {
+      return {
+        accessible: false,
+        status: 410,
+        error: 'The person who shared this file set a timer and it has now expired.',
+      };
+    }
+
+    return { accessible: true };
   }
-  // Presence-based — uploader must have at least one connected tab
+
   const session = await getSession(file.sessionId);
-  if (!session) return false;
-  return session.connectedTabs > 0;
+  if (!session || session.connectedTabs <= 0) {
+    return {
+      accessible: false,
+      status: 410,
+      error: 'The uploader closed their tab, so this file is no longer available.',
+    };
+  }
+
+  return { accessible: true };
 }
 
 router.get('/:fileId', async (req, res) => {
@@ -26,9 +53,9 @@ router.get('/:fileId', async (req, res) => {
       return res.status(404).json({ error: 'File not found or no longer available' });
     }
 
-    const accessible = await isFileAccessible(file);
-    if (!accessible) {
-      return res.status(404).json({ error: 'File not found or no longer available' });
+    const accessState = await getFileAccessState(file);
+    if (!accessState.accessible) {
+      return res.status(accessState.status).json({ error: accessState.error });
     }
 
     res.json({
@@ -54,24 +81,80 @@ router.get('/:fileId/download', async (req, res) => {
       return res.status(404).json({ error: 'File not found or no longer available' });
     }
 
-    const accessible = await isFileAccessible(file);
-    if (!accessible) {
-      return res.status(404).json({ error: 'File not found or no longer available' });
+    const accessState = await getFileAccessState(file);
+    if (!accessState.accessible) {
+      return res.status(accessState.status).json({ error: accessState.error });
     }
 
     const downloadId = nanoid(12);
     await createActiveDownload(fileId, downloadId);
-
-    const downloadUrl = await generateDownloadUrl(file.storageKey, file.fileName);
 
     const io = req.app.get('io');
     if (io) {
       io.to(`session:${file.sessionId}`).emit('file:download-started', { fileId, downloadId });
     }
 
-    res.json({ downloadUrl, fileName: file.fileName, downloadId });
+    const { body, contentLength, contentType } = await getObjectStream(file.storageKey);
+
+    let finalized = false;
+
+    const finalize = async (notifyCompleted = false) => {
+      if (finalized) return;
+      finalized = true;
+      unregisterActiveDownload(fileId, downloadId);
+      await clearActiveDownload(fileId, downloadId);
+
+      if (notifyCompleted && io) {
+        io.to(`session:${file.sessionId}`).emit('file:download-completed', { fileId, downloadId });
+      }
+    };
+
+    const abortDownload = (reason) => {
+      if (finalized) return;
+      finalized = true;
+      unregisterActiveDownload(fileId, downloadId);
+      void clearActiveDownload(fileId, downloadId);
+
+      const abortError = new Error(reason || 'Download expired');
+      if (body?.destroy) {
+        body.destroy(abortError);
+      }
+      if (!res.writableEnded) {
+        res.destroy(abortError);
+      }
+    };
+
+    registerActiveDownload(fileId, downloadId, abortDownload);
+
+    res.setHeader('Content-Type', contentType || file.mimeType || 'application/octet-stream');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename*=UTF-8''${encodeDownloadFileName(file.fileName)}`
+    );
+    if (contentLength !== undefined) {
+      res.setHeader('Content-Length', String(contentLength));
+    }
+
+    res.on('finish', () => {
+      void finalize(true);
+    });
+
+    res.on('close', () => {
+      void finalize(false);
+    });
+
+    body.on('error', (err) => {
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to download file' });
+      } else if (!res.writableEnded) {
+        res.destroy(err);
+      }
+      void finalize(false);
+    });
+
+    body.pipe(res);
   } catch (err) {
-    console.error('[Files] Error generating download URL:', err);
+    console.error('[Files] Error streaming download:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

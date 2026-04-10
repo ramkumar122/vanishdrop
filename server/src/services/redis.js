@@ -132,6 +132,13 @@ async function clearActiveDownload(fileId, downloadId) {
   await redis.del(`download:${fileId}:${downloadId}`);
 }
 
+async function clearActiveDownloads(fileId) {
+  const keys = await getActiveDownloads(fileId);
+  if (keys.length > 0) {
+    await redis.del(...keys);
+  }
+}
+
 async function scanOrphanedSessions() {
   const keys = await redis.keys('session:*');
   const sessions = [];
@@ -167,5 +174,6 @@ module.exports = {
   createActiveDownload,
   getActiveDownloads,
   clearActiveDownload,
+  clearActiveDownloads,
   scanOrphanedSessions,
 };

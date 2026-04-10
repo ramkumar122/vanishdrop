@@ -3,11 +3,12 @@ const {
   getFile,
   deleteFile,
   deleteSession,
-  getActiveDownloads,
   updateFileStatus,
+  clearActiveDownloads,
   scanOrphanedSessions,
 } = require('./redis');
 const { deleteObject } = require('./storage');
+const { abortActiveDownloads } = require('./downloads');
 
 let ioInstance = null;
 
@@ -19,12 +20,15 @@ async function cleanupFile(fileId, retries = 3) {
   const file = await getFile(fileId);
   if (!file) return;
 
-  const activeDownloads = await getActiveDownloads(fileId);
-  if (activeDownloads.length > 0) {
-    console.log(`[Cleanup] File ${fileId} has active downloads, retrying in 30s`);
-    setTimeout(() => cleanupFile(fileId, retries), 30000);
-    return;
+  const abortedDownloads = abortActiveDownloads(
+    fileId,
+    'The person who shared this file set a timer and it has now expired.'
+  );
+  if (abortedDownloads > 0) {
+    console.log(`[Cleanup] Aborted ${abortedDownloads} active download(s) for file ${fileId}`);
   }
+
+  await clearActiveDownloads(fileId);
 
   await updateFileStatus(fileId, 'deleting');
 
