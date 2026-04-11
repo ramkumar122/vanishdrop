@@ -7,11 +7,27 @@
     "server"
   ],
   "scripts": {
+    "check:server": "node --check server/src/index.js && node --check server/src/socket/presence.js && node --check server/src/services/cleanup.js && node --check server/src/services/redis.js && node --check server/src/services/storage.js && node --check server/src/middleware/validation.js && node --check server/src/routes/upload.js && node --check server/src/routes/files.js && node --check server/src/routes/presence.js && node --check server/src/routes/shares.js && node --check server/src/routes/health.js && node --check server/src/lib/presenceAccess.js",
     "dev": "concurrently \"npm run dev --workspace=server\" \"npm run dev --workspace=client\"",
     "build": "npm run build --workspace=client",
-    "install:all": "npm install"
+    "install:all": "npm install",
+    "postinstall": "node scripts/setup-git-hooks.mjs",
+    "playwright:install": "playwright install chromium",
+    "test": "vitest run",
+    "test:infra": "vitest run --config vitest.integration.config.mjs",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "verify": "npm run check:server && npm run test && npm run build --workspace=client",
+    "verify:full": "npm run verify && npm run test:e2e && npm run test:infra"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "@playwright/test": "^1.52.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.3.0",
+    "concurrently": "^8.2.2",
+    "jsdom": "^26.1.0",
+    "supertest": "^7.1.1",
+    "vitest": "^3.1.2"
   }
 }

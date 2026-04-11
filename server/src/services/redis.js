@@ -1,3 +1,4 @@
+const { nanoid } = require('nanoid');
 const Redis = require('ioredis');
 const config = require('../config');
 
@@ -24,8 +25,7 @@ async function createFile(fileId, metadata) {
   const expiresAt = EXPIRY_SECONDS[expiryMode]
     ? new Date(Date.now() + EXPIRY_SECONDS[expiryMode] * 1000).toISOString()
     : '';
-
-  await redis.hset(key, {
+  const payload = {
     fileName: metadata.fileName,
     fileSize: String(metadata.fileSize),
     mimeType: metadata.mimeType,
@@ -35,7 +35,16 @@ async function createFile(fileId, metadata) {
     status: 'uploading',
     expiryMode,
     expiresAt,
-  });
+    uploadType: metadata.uploadType || 'single',
+  };
+  if (metadata.shareId) {
+    payload.shareId = metadata.shareId;
+  }
+  if (metadata.uploadId) {
+    payload.uploadId = metadata.uploadId;
+  }
+
+  await redis.hset(key, payload);
   const ttl = EXPIRY_SECONDS[expiryMode] || FILE_TTL;
   await redis.expire(key, ttl + 300); // small buffer over the actual expiry
 }
@@ -56,12 +65,25 @@ async function deleteFile(fileId) {
 
 async function createSession(sessionId) {
   const key = `session:${sessionId}`;
+  const shareId = nanoid(16);
+  const createdAt = new Date().toISOString();
+
   await redis.hset(key, {
     connectedTabs: '0',
     fileIds: '[]',
-    createdAt: new Date().toISOString(),
-    lastSeen: new Date().toISOString(),
+    createdAt,
+    lastSeen: createdAt,
+    closeRequestedAt: '',
+    shareId,
   });
+
+  await redis.hset(`share:${shareId}`, {
+    sessionId,
+    fileIds: '[]',
+    createdAt,
+  });
+
+  return shareId;
 }
 
 async function getSession(sessionId) {
@@ -69,7 +91,18 @@ async function getSession(sessionId) {
   if (!data || !data.createdAt) return null;
   return {
     ...data,
+    closeRequestedAt: data.closeRequestedAt || null,
     connectedTabs: parseInt(data.connectedTabs || '0', 10),
+    fileIds: JSON.parse(data.fileIds || '[]'),
+  };
+}
+
+async function getShare(shareId) {
+  const data = await redis.hgetall(`share:${shareId}`);
+  if (!data || !data.createdAt) return null;
+
+  return {
+    ...data,
     fileIds: JSON.parse(data.fileIds || '[]'),
   };
 }
@@ -82,6 +115,33 @@ async function addFileToSession(sessionId, fileId) {
     fileIds.push(fileId);
   }
   await redis.hset(`session:${sessionId}`, 'fileIds', JSON.stringify(fileIds));
+}
+
+async function addFileToShare(shareId, fileId) {
+  const share = await getShare(shareId);
+  if (!share) return;
+
+  const fileIds = share.fileIds;
+  if (!fileIds.includes(fileId)) {
+    fileIds.push(fileId);
+  }
+
+  await redis.hset(`share:${shareId}`, 'fileIds', JSON.stringify(fileIds));
+}
+
+async function removeFileFromShare(shareId, fileId) {
+  if (!shareId) return;
+
+  const share = await getShare(shareId);
+  if (!share) return;
+
+  const fileIds = share.fileIds.filter((existingId) => existingId !== fileId);
+  if (fileIds.length === 0) {
+    await deleteShare(shareId);
+    return;
+  }
+
+  await redis.hset(`share:${shareId}`, 'fileIds', JSON.stringify(fileIds));
 }
 
 async function incrementTabs(sessionId) {
@@ -105,6 +165,14 @@ async function updateLastSeen(sessionId) {
   await redis.hset(`session:${sessionId}`, 'lastSeen', new Date().toISOString());
 }
 
+async function markSessionCloseRequested(sessionId) {
+  await redis.hset(`session:${sessionId}`, 'closeRequestedAt', new Date().toISOString());
+}
+
+async function clearSessionCloseRequested(sessionId) {
+  await redis.hset(`session:${sessionId}`, 'closeRequestedAt', '');
+}
+
 async function setSessionExpiry(sessionId, seconds) {
   await redis.expire(`session:${sessionId}`, seconds);
 }
@@ -114,7 +182,21 @@ async function removeSessionExpiry(sessionId) {
 }
 
 async function deleteSession(sessionId) {
+  const session = await getSession(sessionId);
   await redis.del(`session:${sessionId}`);
+
+  if (!session?.shareId) {
+    return;
+  }
+
+  const share = await getShare(session.shareId);
+  if (share && share.fileIds.length === 0) {
+    await deleteShare(session.shareId);
+  }
+}
+
+async function deleteShare(shareId) {
+  await redis.del(`share:${shareId}`);
 }
 
 async function createActiveDownload(fileId, downloadId) {
@@ -164,13 +246,19 @@ module.exports = {
   deleteFile,
   createSession,
   getSession,
+  getShare,
   addFileToSession,
+  addFileToShare,
+  removeFileFromShare,
   incrementTabs,
   decrementTabs,
   updateLastSeen,
+  markSessionCloseRequested,
+  clearSessionCloseRequested,
   setSessionExpiry,
   removeSessionExpiry,
   deleteSession,
+  deleteShare,
   createActiveDownload,
   getActiveDownloads,
   clearActiveDownload,

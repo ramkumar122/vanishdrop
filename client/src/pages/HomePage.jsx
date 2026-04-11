@@ -15,16 +15,19 @@ const EXPIRY_OPTIONS = [
 
 export default function HomePage() {
   const navigate = useNavigate();
-  const { sessionId, connected, sessionReady, emit } = useSocket();
+  const { sessionId, connected, sessionReady, sessionError, emit } = useSocket();
   const {
-    upload,
+    uploadFiles,
     reset,
     status: uploadStatus,
     progress,
     bytesUploaded,
     totalBytes,
     error,
-    fileId,
+    shareId,
+    completedFiles,
+    totalFiles,
+    currentFileName,
   } = useUpload(sessionId);
 
   const [expiryMode, setExpiryMode] = useState('presence');
@@ -32,10 +35,10 @@ export default function HomePage() {
   usePresence(emit, connected);
 
   useEffect(() => {
-    if (uploadStatus === 'done' && fileId) {
-      navigate(`/share/${fileId}`);
+    if (uploadStatus === 'done' && shareId) {
+      navigate(`/share/${shareId}`);
     }
-  }, [uploadStatus, fileId, navigate]);
+  }, [uploadStatus, shareId, navigate]);
 
   const isUploading = uploadStatus === 'uploading' || uploadStatus === 'completing';
   const uploadReady = connected && sessionReady;
@@ -56,10 +59,13 @@ export default function HomePage() {
             bytesUploaded={bytesUploaded}
             totalBytes={totalBytes}
             status={uploadStatus}
+            currentFileName={currentFileName}
+            completedFiles={completedFiles}
+            totalFiles={totalFiles}
           />
         ) : (
           <>
-            <DropZone onFile={(file) => upload(file, expiryMode)} disabled={!uploadReady} />
+            <DropZone onFiles={(files) => uploadFiles(files, expiryMode)} disabled={!uploadReady} />
 
             <div>
               <p className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">
@@ -85,11 +91,14 @@ export default function HomePage() {
           </>
         )}
 
-        {error && (
+        {(error || sessionError) && (
           <div className="p-3 bg-red-900/30 border border-red-800 rounded-lg text-red-400 text-sm animate-fade-in">
-            {error}
-            <button onClick={reset} className="ml-2 underline hover:no-underline">
-              Try again
+            {error || sessionError}
+            <button
+              onClick={sessionError ? () => window.location.reload() : reset}
+              className="ml-2 underline hover:no-underline"
+            >
+              {sessionError ? 'Reload' : 'Try again'}
             </button>
           </div>
         )}
@@ -104,15 +113,15 @@ export default function HomePage() {
       <div className="mt-10 grid grid-cols-3 gap-4 text-center text-sm text-gray-500">
         <div>
           <div className="text-2xl mb-1">☁️</div>
-          <p>Upload your file</p>
+          <p>Upload your files</p>
         </div>
         <div>
           <div className="text-2xl mb-1">🔗</div>
-          <p>Share the link</p>
+          <p>Share one link</p>
         </div>
         <div>
           <div className="text-2xl mb-1">💨</div>
-          <p>Files auto-delete</p>
+          <p>Recipients choose files</p>
         </div>
       </div>
     </div>

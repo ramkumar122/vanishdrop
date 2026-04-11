@@ -20,6 +20,10 @@ infra/outputs.json
 # Logs
 *.log
 npm-debug.log*
+coverage/
+.vitest/
+playwright-report/
+test-results/
 
 # OS
 .DS_Store

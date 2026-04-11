@@ -1,6 +1,14 @@
 import { formatFileSize } from '../lib/utils.js';
 
-export default function UploadProgress({ progress, bytesUploaded, totalBytes, status }) {
+export default function UploadProgress({
+  progress,
+  bytesUploaded,
+  totalBytes,
+  status,
+  currentFileName,
+  completedFiles = 0,
+  totalFiles = 0,
+}) {
   const label =
     status === 'completing'
       ? 'Finalizing…'
@@ -21,6 +29,19 @@ export default function UploadProgress({ progress, bytesUploaded, totalBytes, st
       </div>
 
       <p className="text-center text-gray-500 text-xs mt-2">{label}</p>
+
+      {totalFiles > 0 && (
+        <div className="mt-3 text-center space-y-1">
+          <p className="text-xs text-gray-400">
+            {completedFiles} of {totalFiles} file{totalFiles === 1 ? '' : 's'} uploaded
+          </p>
+          {currentFileName && (
+            <p className="text-xs text-gray-500 truncate" title={currentFileName}>
+              Current: {currentFileName}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

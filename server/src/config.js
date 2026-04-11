@@ -17,7 +17,7 @@ module.exports = {
   },
 
   limits: {
-    maxFileSize: parseInt(process.env.MAX_FILE_SIZE || '104857600', 10),
+    maxFileSize: parseInt(process.env.MAX_FILE_SIZE || '10737418240', 10),
     uploadRateLimit: parseInt(process.env.UPLOAD_RATE_LIMIT || '10', 10),
     sessionGracePeriod: parseInt(process.env.SESSION_GRACE_PERIOD || '30', 10),
     presignedUrlExpiry: parseInt(process.env.PRESIGNED_URL_EXPIRY || '3600', 10),

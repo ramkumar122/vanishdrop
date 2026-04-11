@@ -3,6 +3,7 @@ const {
   getFile,
   deleteFile,
   deleteSession,
+  removeFileFromShare,
   updateFileStatus,
   clearActiveDownloads,
   scanOrphanedSessions,
@@ -49,6 +50,7 @@ async function cleanupFile(fileId, retries = 3) {
   }
 
   await deleteFile(fileId);
+  await removeFileFromShare(file.shareId, fileId);
 
   if (ioInstance) {
     ioInstance.to(`file:${fileId}`).emit('file:deleted', { fileId });

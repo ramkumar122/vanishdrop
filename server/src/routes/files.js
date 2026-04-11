@@ -8,6 +8,7 @@ const {
 } = require('../services/redis');
 const { getObjectStream } = require('../services/storage');
 const { registerActiveDownload, unregisterActiveDownload } = require('../services/downloads');
+const { isSessionWithinGracePeriod, getPresenceUnavailableMessage } = require('../lib/presenceAccess');
 
 const router = express.Router();
 
@@ -33,11 +34,11 @@ async function getFileAccessState(file) {
   }
 
   const session = await getSession(file.sessionId);
-  if (!session || session.connectedTabs <= 0) {
+  if (!isSessionWithinGracePeriod(session)) {
     return {
       accessible: false,
       status: 410,
-      error: 'The uploader closed their tab, so this file is no longer available.',
+      error: getPresenceUnavailableMessage('file'),
     };
   }
 

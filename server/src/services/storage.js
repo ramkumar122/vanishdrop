@@ -4,9 +4,15 @@ const {
   DeleteObjectCommand,
   HeadObjectCommand,
   GetObjectCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
 } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const config = require('../config');
+
+const MAX_SINGLE_UPLOAD_SIZE = 5 * 1024 * 1024 * 1024; // 5GB
+const MULTIPART_PART_SIZE = 64 * 1024 * 1024; // 64MB
 
 const s3Config = {
   region: config.s3.region,
@@ -35,6 +41,64 @@ async function generateUploadUrl(storageKey, mimeType, fileSize) {
   });
 
   return url;
+}
+
+async function createMultipartUploadPlan(storageKey, mimeType, fileSize) {
+  const multipart = await s3.send(
+    new CreateMultipartUploadCommand({
+      Bucket: config.s3.bucket,
+      Key: storageKey,
+      ContentType: mimeType,
+    })
+  );
+
+  const uploadId = multipart.UploadId;
+  const partCount = Math.max(1, Math.ceil(fileSize / MULTIPART_PART_SIZE));
+  const partUrls = await Promise.all(
+    Array.from({ length: partCount }, async (_, index) => {
+      const partNumber = index + 1;
+      const command = new UploadPartCommand({
+        Bucket: config.s3.bucket,
+        Key: storageKey,
+        UploadId: uploadId,
+        PartNumber: partNumber,
+      });
+
+      return {
+        partNumber,
+        uploadUrl: await getSignedUrl(s3, command, {
+          expiresIn: config.limits.presignedUrlExpiry,
+        }),
+      };
+    })
+  );
+
+  return {
+    partSize: MULTIPART_PART_SIZE,
+    partUrls,
+    uploadId,
+    uploadType: 'multipart',
+  };
+}
+
+async function completeMultipartUpload(storageKey, uploadId, parts) {
+  const sortedParts = [...parts]
+    .map((part) => ({
+      ETag: part.ETag,
+      PartNumber: Number(part.PartNumber),
+    }))
+    .sort((a, b) => a.PartNumber - b.PartNumber);
+
+  await s3.send(
+    new CompleteMultipartUploadCommand({
+      Bucket: config.s3.bucket,
+      Key: storageKey,
+      UploadId: uploadId,
+      MultipartUpload: {
+        Parts: sortedParts,
+      },
+    })
+  );
 }
 
 async function generateDownloadUrl(storageKey, fileName) {
@@ -91,4 +155,14 @@ async function headObject(storageKey) {
   }
 }
 
-module.exports = { generateUploadUrl, generateDownloadUrl, getObjectStream, deleteObject, headObject };
+module.exports = {
+  MAX_SINGLE_UPLOAD_SIZE,
+  MULTIPART_PART_SIZE,
+  generateUploadUrl,
+  createMultipartUploadPlan,
+  completeMultipartUpload,
+  generateDownloadUrl,
+  getObjectStream,
+  deleteObject,
+  headObject,
+};

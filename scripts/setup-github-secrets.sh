@@ -48,6 +48,7 @@ echo "Parsing CDK outputs..."
 
 STACK="VanishDropStack"
 S3_BUCKET=$(jq -r ".${STACK}.UploadsBucketName" outputs.json)
+S3_TEST_BUCKET=$(jq -r ".${STACK}.TestUploadsBucketName" outputs.json)
 DEPLOY_BUCKET=$(jq -r ".${STACK}.DeployBucketName" outputs.json)
 AWS_ROLE_ARN=$(jq -r ".${STACK}.GitHubActionsRoleArn" outputs.json)
 AWS_REGION=$(jq -r ".${STACK}.Region" outputs.json)
@@ -60,6 +61,7 @@ echo "Setting GitHub Secrets for $GITHUB_REPO..."
 
 gh secret set REDIS_URL         --body "$REDIS_URL"        --repo "$GITHUB_REPO"
 gh secret set S3_BUCKET         --body "$S3_BUCKET"        --repo "$GITHUB_REPO"
+gh secret set S3_TEST_BUCKET    --body "$S3_TEST_BUCKET"   --repo "$GITHUB_REPO"
 gh secret set DEPLOY_BUCKET     --body "$DEPLOY_BUCKET"    --repo "$GITHUB_REPO"
 gh secret set AWS_ROLE_ARN      --body "$AWS_ROLE_ARN"     --repo "$GITHUB_REPO"
 gh secret set AWS_REGION        --body "$AWS_REGION"       --repo "$GITHUB_REPO"
@@ -73,7 +75,8 @@ echo "All done! GitHub Secrets set automatically."
 echo ""
 echo "  Server IP      : $SERVER_IP"
 echo "  EC2 Instance ID: $EC2_INSTANCE_ID"
-echo "  S3 Bucket      : $S3_BUCKET"
+echo "  Uploads Bucket : $S3_BUCKET"
+echo "  Test Bucket    : $S3_TEST_BUCKET"
 echo "  Region         : $AWS_REGION"
 echo ""
 echo "Next steps:"

@@ -1,103 +1,198 @@
 import { useState, useCallback } from 'react';
-import { initiateUpload, completeUpload, uploadToS3 } from '../lib/api.js';
+import {
+  completeUpload,
+  initiateUpload,
+  uploadMultipartToS3,
+  uploadToS3,
+} from '../lib/api.js';
 
-const MAX_FILE_SIZE = 104857600; // 100MB
+const MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024; // 10GB
 
-export function useUpload(sessionId) {
-  const [state, setState] = useState({
+function initialState() {
+  return {
     status: 'idle', // 'idle' | 'uploading' | 'completing' | 'done' | 'error'
     progress: 0,
     bytesUploaded: 0,
     totalBytes: 0,
     error: null,
-    fileId: null,
+    shareId: null,
     shareLink: null,
     expiryMode: 'presence',
-  });
+    completedFiles: 0,
+    totalFiles: 0,
+    currentFileName: null,
+  };
+}
+
+function formatFileSizeInGb(bytes) {
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)}GB`;
+}
+
+export function useUpload(sessionId) {
+  const [state, setState] = useState(initialState);
 
   const reset = useCallback(() => {
-    setState({
-      status: 'idle',
-      progress: 0,
-      bytesUploaded: 0,
-      totalBytes: 0,
-      error: null,
-      fileId: null,
-      shareLink: null,
-      expiryMode: 'presence',
-    });
+    setState(initialState());
   }, []);
 
-  const upload = useCallback(
-    async (file, expiryMode = 'presence') => {
+  const uploadFiles = useCallback(
+    async (files, expiryMode = 'presence') => {
       if (!sessionId) {
-        setState((s) => ({ ...s, status: 'error', error: 'No active session. Please wait a moment and try again.' }));
-        return null;
-      }
-
-      if (file.size > MAX_FILE_SIZE) {
-        setState((s) => ({
-          ...s,
+        setState((current) => ({
+          ...current,
           status: 'error',
-          error: `File is too large. Maximum size is 100MB. Your file is ${(file.size / 1024 / 1024).toFixed(1)}MB.`,
+          error: 'No active session. Please wait a moment and try again.',
         }));
         return null;
       }
 
-      if (file.size === 0) {
-        setState((s) => ({ ...s, status: 'error', error: 'File is empty.' }));
+      if (!Array.isArray(files) || files.length === 0) {
+        setState((current) => ({
+          ...current,
+          status: 'error',
+          error: 'Choose at least one file to upload.',
+        }));
         return null;
       }
 
-      setState((s) => ({
-        ...s,
+      for (const file of files) {
+        if (file.size > MAX_FILE_SIZE) {
+          setState((current) => ({
+            ...current,
+            status: 'error',
+            error: `File "${file.name}" is too large. Maximum size is 10GB. Your file is ${formatFileSizeInGb(file.size)}.`,
+          }));
+          return null;
+        }
+
+        if (file.size === 0) {
+          setState((current) => ({
+            ...current,
+            status: 'error',
+            error: `File "${file.name}" is empty.`,
+          }));
+          return null;
+        }
+      }
+
+      const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+
+      setState((current) => ({
+        ...current,
         status: 'uploading',
         progress: 0,
         bytesUploaded: 0,
-        totalBytes: file.size,
+        totalBytes,
         error: null,
+        shareId: null,
+        shareLink: null,
+        expiryMode,
+        completedFiles: 0,
+        totalFiles: files.length,
+        currentFileName: files[0]?.name || null,
       }));
 
+      let uploadedBytesBeforeCurrent = 0;
+      let completedFiles = 0;
+      let shareId = null;
+      let shareLink = null;
+
       try {
-        const { fileId, uploadUrl, shareLink } = await initiateUpload({
-          fileName: file.name,
-          fileSize: file.size,
-          mimeType: file.type || 'application/octet-stream',
-          sessionId,
-          expiryMode,
-        });
-
-        await uploadToS3(uploadUrl, file, (pct, loaded, total) => {
-          setState((s) => ({
-            ...s,
-            progress: pct,
-            bytesUploaded: loaded,
-            totalBytes: total,
+        for (const file of files) {
+          setState((current) => ({
+            ...current,
+            currentFileName: file.name,
+            status: 'uploading',
           }));
-        });
 
-        setState((s) => ({ ...s, status: 'completing' }));
+          const uploadTarget = await initiateUpload({
+            fileName: file.name,
+            fileSize: file.size,
+            mimeType: file.type || 'application/octet-stream',
+            sessionId,
+            expiryMode,
+          });
 
-        await completeUpload(fileId, sessionId);
+          if (!shareId) {
+            shareId = uploadTarget.shareId;
+            shareLink = uploadTarget.shareLink;
+          }
 
-        setState((s) => ({
-          ...s,
+          const onProgress = (loaded, total) => {
+            const aggregateLoaded = uploadedBytesBeforeCurrent + loaded;
+            setState((current) => ({
+              ...current,
+              bytesUploaded: aggregateLoaded,
+              progress: totalBytes === 0 ? 0 : Math.round((aggregateLoaded / totalBytes) * 100),
+              totalBytes,
+            }));
+          };
+
+          if (uploadTarget.uploadType === 'multipart') {
+            const parts = await uploadMultipartToS3({
+              file,
+              partSize: uploadTarget.partSize,
+              partUrls: uploadTarget.partUrls,
+              onProgress,
+            });
+
+            setState((current) => ({
+              ...current,
+              status: 'completing',
+            }));
+
+            await completeUpload(uploadTarget.fileId, sessionId, parts);
+          } else {
+            await uploadToS3(uploadTarget.uploadUrl, file, onProgress);
+
+            setState((current) => ({
+              ...current,
+              status: 'completing',
+            }));
+
+            await completeUpload(uploadTarget.fileId, sessionId);
+          }
+
+          uploadedBytesBeforeCurrent += file.size;
+          completedFiles += 1;
+
+          setState((current) => ({
+            ...current,
+            bytesUploaded: uploadedBytesBeforeCurrent,
+            completedFiles,
+            progress: totalBytes === 0 ? 0 : Math.round((uploadedBytesBeforeCurrent / totalBytes) * 100),
+            status: completedFiles === files.length ? 'done' : 'uploading',
+          }));
+        }
+
+        setState((current) => ({
+          ...current,
           status: 'done',
           progress: 100,
-          fileId,
+          bytesUploaded: totalBytes,
+          completedFiles,
+          currentFileName: null,
+          shareId,
           shareLink,
           expiryMode,
         }));
 
-        return { fileId, shareLink, expiryMode };
+        return { shareId, shareLink, expiryMode };
       } catch (err) {
         const message = err.response?.data?.error || err.message || 'Upload failed';
-        setState((s) => ({ ...s, status: 'error', error: message }));
+        setState((current) => ({
+          ...current,
+          status: 'error',
+          error:
+            completedFiles > 0
+              ? `${message} ${completedFiles} of ${files.length} file(s) uploaded before the failure.`
+              : message,
+        }));
         return null;
       }
     },
     [sessionId]
   );
 
-  return { ...state, upload, reset };
+  return { ...state, uploadFiles, reset };
 }

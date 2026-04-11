@@ -19,7 +19,7 @@ function validateUpload(req, res, next) {
   }
   if (size > config.limits.maxFileSize) {
     return res.status(400).json({
-      error: `File size exceeds maximum of ${config.limits.maxFileSize} bytes (100MB)`,
+      error: `File size exceeds maximum of ${config.limits.maxFileSize} bytes (10GB)`,
     });
   }
 

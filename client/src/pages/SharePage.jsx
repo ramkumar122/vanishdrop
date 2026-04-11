@@ -1,151 +1,241 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { useSocket } from '../hooks/useSocket.js';
-import { usePresence } from '../hooks/usePresence.js';
+import FileInfo from '../components/FileInfo.jsx';
 import PresenceIndicator from '../components/PresenceIndicator.jsx';
 import ShareLink from '../components/ShareLink.jsx';
-import { getFileInfo } from '../lib/api.js';
-import { formatFileSize, getMimeIcon } from '../lib/utils.js';
+import { usePresence } from '../hooks/usePresence.js';
+import { useSocket } from '../hooks/useSocket.js';
+import { getShareFiles } from '../lib/api.js';
+import { formatFileSize } from '../lib/utils.js';
 
-function ExpiryBadge({ expiryMode, expiresAt }) {
+function ExpiryBadge({ file }) {
   const [timeLeft, setTimeLeft] = useState('');
 
   useEffect(() => {
-    if (!expiresAt) return;
+    if (!file.expiresAt || file.expiryMode === 'presence') {
+      return undefined;
+    }
+
     function update() {
-      const diff = new Date(expiresAt) - new Date();
-      if (diff <= 0) { setTimeLeft('Expired'); return; }
+      const diff = new Date(file.expiresAt) - new Date();
+      if (diff <= 0) {
+        setTimeLeft('Expired');
+        return;
+      }
+
       const h = Math.floor(diff / 3600000);
       const m = Math.floor((diff % 3600000) / 60000);
       const s = Math.floor((diff % 60000) / 1000);
       setTimeLeft(h > 0 ? `${h}h ${m}m left` : m > 0 ? `${m}m ${s}s left` : `${s}s left`);
     }
+
     update();
     const id = setInterval(update, 1000);
     return () => clearInterval(id);
-  }, [expiresAt]);
+  }, [file.expiresAt, file.expiryMode]);
 
-  if (expiryMode === 'presence') return null;
+  if (file.expiryMode === 'presence') {
+    return (
+      <p className="text-xs text-gray-500 mt-2">
+        Vanishes when you close your tab.
+      </p>
+    );
+  }
 
   return (
-    <div className="flex items-center gap-2 text-sm text-indigo-400 bg-indigo-950/40 border border-indigo-800/50 rounded-lg px-3 py-2">
-      <span>⏱</span>
-      <span>Auto-deletes in <span className="font-semibold">{timeLeft}</span></span>
-    </div>
+    <p className="text-xs text-indigo-400 mt-2">
+      Auto-deletes in {timeLeft}
+    </p>
   );
 }
 
 export default function SharePage() {
-  const { fileId } = useParams();
+  const { shareId } = useParams();
   const { connected, status, on, emit, joinRoom } = useSocket();
-  const [fileInfo, setFileInfo] = useState(null);
+  const [shareData, setShareData] = useState(null);
   const [events, setEvents] = useState([]);
-  const [isDeleted, setIsDeleted] = useState(false);
+  const [loadState, setLoadState] = useState('loading');
+  const [vanishReason, setVanishReason] = useState(null);
 
   usePresence(emit, connected);
 
-  // Only warn on close for presence-based files
+  const refreshShare = useCallback(async (showLoading = true) => {
+    if (showLoading) {
+      setLoadState('loading');
+    }
+
+    try {
+      const data = await getShareFiles(shareId);
+      setShareData(data);
+      setLoadState('available');
+      setVanishReason(null);
+    } catch (err) {
+      const message = err.response?.data?.error;
+      if (err.response?.status === 410) {
+        setVanishReason(message || 'The files in this share are no longer available.');
+        setLoadState('vanished');
+        setShareData(null);
+        return;
+      }
+
+      setLoadState('notfound');
+      setShareData(null);
+    }
+  }, [shareId]);
+
   useEffect(() => {
-    if (fileInfo?.expiryMode && fileInfo.expiryMode !== 'presence') return;
+    void refreshShare(true);
+  }, [refreshShare]);
+
+  useEffect(() => {
+    if (!shareData?.hasPresenceFiles) {
+      return undefined;
+    }
+
     function handleBeforeUnload(e) {
       e.preventDefault();
       e.returnValue = 'Your shared files will be deleted. Are you sure?';
       return e.returnValue;
     }
+
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [fileInfo]);
+  }, [shareData?.hasPresenceFiles]);
 
   useEffect(() => {
-    getFileInfo(fileId)
-      .then((data) => {
-        setFileInfo(data);
-        setIsDeleted(false);
-      })
-      .catch(() => setFileInfo(null));
-  }, [fileId]);
+    if (!shareData?.files?.length) {
+      return undefined;
+    }
 
-  useEffect(() => {
-    joinRoom(fileId);
+    for (const file of shareData.files) {
+      joinRoom(file.fileId);
+    }
 
-    const offDeleted = on('file:deleted', ({ fileId: fid }) => {
-      if (fid === fileId) {
-        setIsDeleted(true);
+    const offReady = on('file:ready', ({ shareId: readyShareId }) => {
+      if (readyShareId === shareId) {
+        void refreshShare(false);
       }
     });
-    const offStarted = on('file:download-started', ({ fileId: fid }) => {
-      if (fid === fileId) {
-        setEvents((prev) => [{ type: 'started', at: new Date() }, ...prev].slice(0, 10));
-      }
+
+    const offDeleted = on('file:deleted', ({ fileId }) => {
+      setShareData((current) => {
+        if (!current) return current;
+
+        const files = current.files.filter((file) => file.fileId !== fileId);
+        if (files.length === 0) {
+          setVanishReason('All files in this share have vanished.');
+          setLoadState('vanished');
+          return null;
+        }
+
+        return {
+          ...current,
+          files,
+          totalFiles: files.length,
+        };
+      });
     });
-    const offCompleted = on('file:download-completed', ({ fileId: fid }) => {
-      if (fid === fileId) {
-        setEvents((prev) => [{ type: 'completed', at: new Date() }, ...prev].slice(0, 10));
-      }
+
+    const offStarted = on('file:download-started', ({ fileId }) => {
+      const file = shareData.files.find((entry) => entry.fileId === fileId);
+      if (!file) return;
+
+      setEvents((prev) => [{ fileName: file.fileName, type: 'started', at: new Date() }, ...prev].slice(0, 10));
     });
+
+    const offCompleted = on('file:download-completed', ({ fileId }) => {
+      const file = shareData.files.find((entry) => entry.fileId === fileId);
+      if (!file) return;
+
+      setEvents((prev) => [{ fileName: file.fileName, type: 'completed', at: new Date() }, ...prev].slice(0, 10));
+    });
+
     return () => {
+      offReady?.();
       offDeleted?.();
       offStarted?.();
       offCompleted?.();
     };
-  }, [on, fileId, joinRoom]);
+  }, [joinRoom, on, refreshShare, shareData, shareId]);
 
-  if (isDeleted) {
+  const shareUrl = `${window.location.origin}/d/${shareId}`;
+  const totalBytes = useMemo(
+    () => shareData?.files?.reduce((sum, file) => sum + file.fileSize, 0) || 0,
+    [shareData]
+  );
+
+  if (loadState === 'loading') {
+    return (
+      <div className="w-full max-w-lg animate-fade-in">
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-10 text-center">
+          <div className="text-4xl mb-4 opacity-50">⏳</div>
+          <p className="text-gray-400">Loading shared files…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadState === 'notfound' || loadState === 'vanished') {
     return (
       <div className="w-full max-w-lg animate-fade-in text-center">
         <div className="text-6xl mb-4">💨</div>
-        <h2 className="text-2xl font-bold text-white mb-2">This file has vanished</h2>
+        <h2 className="text-2xl font-bold text-white mb-2">This share has vanished</h2>
         <p className="text-gray-400 mb-6">
-          The shared file was deleted. The uploader disconnected or the timer expired.
+          {loadState === 'vanished'
+            ? (vanishReason || 'The files were deleted. The timer expired or the uploader closed their tab.')
+            : 'The shared link you are looking for no longer exists.'}
         </p>
         <a href="/" className="text-indigo-400 hover:text-indigo-300 underline">
-          Share another file
+          Share another file set
         </a>
       </div>
     );
   }
 
-  const shareUrl = `${window.location.origin}/d/${fileId}`;
-  const isPresence = !fileInfo?.expiryMode || fileInfo.expiryMode === 'presence';
-
   return (
-    <div className="w-full max-w-lg animate-fade-in">
+    <div className="w-full max-w-2xl animate-fade-in">
       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-6">
         <PresenceIndicator status={status} />
 
         <ShareLink url={shareUrl} />
 
-        {fileInfo && (
-          <>
-            <div className="flex items-center gap-3 bg-gray-800/50 rounded-xl p-4 border border-gray-700">
-              <span className="text-3xl">{getMimeIcon(fileInfo.mimeType)}</span>
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-white truncate" title={fileInfo.fileName}>
-                  {fileInfo.fileName}
-                </p>
-                <p className="text-sm text-gray-400">{formatFileSize(fileInfo.fileSize)}</p>
-              </div>
+        <div className="bg-gray-800/40 border border-gray-700 rounded-xl p-4">
+          <p className="text-sm text-gray-400">Live now</p>
+          <h2 className="text-2xl font-bold text-white mt-1">
+            {shareData.totalFiles} file{shareData.totalFiles === 1 ? '' : 's'} ready to share
+          </h2>
+          <p className="text-sm text-gray-500 mt-1">{formatFileSize(totalBytes)} total</p>
+        </div>
+
+        <div className="space-y-3">
+          {shareData.files.map((file) => (
+            <div key={file.fileId} className="bg-gray-800/30 border border-gray-700 rounded-xl p-4">
+              <FileInfo
+                fileName={file.fileName}
+                fileSize={file.fileSize}
+                mimeType={file.mimeType}
+              />
+              <ExpiryBadge file={file} />
             </div>
-            <ExpiryBadge expiryMode={fileInfo.expiryMode} expiresAt={fileInfo.expiresAt} />
-          </>
-        )}
+          ))}
+        </div>
 
         {events.length > 0 && (
           <div className="space-y-2">
             <p className="text-xs text-gray-500 uppercase tracking-wider font-medium">Activity</p>
-            {events.map((e, i) => (
-              <p key={i} className="text-sm text-gray-400 animate-fade-in">
-                {e.type === 'started' ? '⬇️ Someone started downloading' : '✅ Download completed'}
-                <span className="text-gray-600 ml-2 text-xs">{e.at.toLocaleTimeString()}</span>
+            {events.map((event, index) => (
+              <p key={`${event.fileName}-${event.type}-${index}`} className="text-sm text-gray-400 animate-fade-in">
+                {event.type === 'started' ? '⬇️ Download started' : '✅ Download completed'} for {event.fileName}
+                <span className="text-gray-600 ml-2 text-xs">{event.at.toLocaleTimeString()}</span>
               </p>
             ))}
           </div>
         )}
       </div>
 
-      {isPresence && (
+      {shareData.hasPresenceFiles && (
         <div className="mt-4 p-3 bg-amber-950/40 border border-amber-800/50 rounded-xl text-amber-400 text-sm text-center">
-          ⚠️ Closing this tab will permanently delete all shared files
+          ⚠️ Closing this tab will permanently delete any presence-based files in this link
         </div>
       )}
     </div>

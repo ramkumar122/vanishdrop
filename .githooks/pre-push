@@ -1,0 +1,4 @@
+#!/bin/sh
+
+echo "Running full local + infrastructure verification before push..."
+npm run verify:full

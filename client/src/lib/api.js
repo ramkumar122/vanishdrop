@@ -12,13 +12,18 @@ export async function initiateUpload({ fileName, fileSize, mimeType, sessionId, 
   return data;
 }
 
-export async function completeUpload(fileId, sessionId) {
-  const { data } = await api.post(`/upload/${fileId}/complete`, { sessionId });
+export async function completeUpload(fileId, sessionId, parts = []) {
+  const { data } = await api.post(`/upload/${fileId}/complete`, { sessionId, parts });
   return data;
 }
 
 export async function getFileInfo(fileId) {
   const { data } = await api.get(`/files/${fileId}`);
+  return data;
+}
+
+export async function getShareFiles(shareId) {
+  const { data } = await api.get(`/shares/${shareId}`);
   return data;
 }
 
@@ -89,8 +94,7 @@ export async function uploadToS3(uploadUrl, file, onProgress) {
 
     xhr.upload.addEventListener('progress', (e) => {
       if (e.lengthComputable) {
-        const pct = Math.round((e.loaded / e.total) * 100);
-        onProgress?.(pct, e.loaded, e.total);
+        onProgress?.(e.loaded, e.total);
       }
     });
 
@@ -109,6 +113,63 @@ export async function uploadToS3(uploadUrl, file, onProgress) {
     xhr.setRequestHeader('Content-Type', file.type);
     xhr.send(file);
   });
+}
+
+function uploadPartToS3(uploadUrl, blob, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable) {
+        onProgress?.(e.loaded, e.total);
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const etag = xhr.getResponseHeader('ETag');
+        if (!etag) {
+          reject(new Error('Missing upload ETag from S3 multipart response'));
+          return;
+        }
+
+        resolve(etag);
+      } else {
+        reject(new Error(`S3 multipart upload failed with status ${xhr.status}`));
+      }
+    });
+
+    xhr.addEventListener('error', () => reject(new Error('Network error during multipart upload')));
+    xhr.addEventListener('abort', () => reject(new Error('Multipart upload aborted')));
+
+    xhr.open('PUT', uploadUrl);
+    xhr.send(blob);
+  });
+}
+
+export async function uploadMultipartToS3({ file, partSize, partUrls, onProgress }) {
+  const completedParts = [];
+  let uploadedBytes = 0;
+
+  for (const part of partUrls) {
+    const start = (part.partNumber - 1) * partSize;
+    const end = Math.min(start + partSize, file.size);
+    const chunk = file.slice(start, end);
+
+    const etag = await uploadPartToS3(part.uploadUrl, chunk, (loaded) => {
+      onProgress?.(uploadedBytes + loaded, file.size);
+    });
+
+    uploadedBytes += chunk.size;
+    onProgress?.(uploadedBytes, file.size);
+
+    completedParts.push({
+      ETag: etag,
+      PartNumber: part.partNumber,
+    });
+  }
+
+  return completedParts;
 }
 
 export default api;

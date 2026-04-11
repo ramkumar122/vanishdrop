@@ -25,14 +25,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build client
-        run: npm run build --workspace=client
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
 
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Verify app
+        env:
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          REDIS_TEST_URL: ${{ secrets.REDIS_URL }}
+          S3_TEST_BUCKET: ${{ secrets.S3_TEST_BUCKET }}
+          S3_TEST_REGION: ${{ secrets.AWS_REGION }}
+        run: npm run verify:full
 
       - name: Package and upload to S3
         run: |
@@ -41,7 +49,7 @@ jobs:
 
       - name: Deploy to EC2 via SSM
         run: |
-          ENV_B64=$(printf 'NODE_ENV=production\nPORT=3001\nREDIS_URL=%s\nS3_BUCKET=%s\nS3_REGION=%s\nCORS_ORIGIN=%s\nMAX_FILE_SIZE=104857600\nUPLOAD_RATE_LIMIT=10\nSESSION_GRACE_PERIOD=30\nPRESIGNED_URL_EXPIRY=3600\nDOWNLOAD_URL_EXPIRY=300\n' \
+          ENV_B64=$(printf 'NODE_ENV=production\nPORT=3001\nREDIS_URL=%s\nS3_BUCKET=%s\nS3_REGION=%s\nCORS_ORIGIN=%s\nMAX_FILE_SIZE=10737418240\nUPLOAD_RATE_LIMIT=10\nSESSION_GRACE_PERIOD=5\nPRESIGNED_URL_EXPIRY=3600\nDOWNLOAD_URL_EXPIRY=300\n' \
             '${{ secrets.REDIS_URL }}' \
             '${{ secrets.S3_BUCKET }}' \
             '${{ secrets.AWS_REGION }}' \

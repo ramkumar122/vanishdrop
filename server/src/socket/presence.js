@@ -1,15 +1,35 @@
 const { nanoid } = require('nanoid');
-const {
-  createSession,
-  getSession,
-  incrementTabs,
-  decrementTabs,
-  updateLastSeen,
-  setSessionExpiry,
-  removeSessionExpiry,
-} = require('../services/redis');
-const { cleanupSession } = require('../services/cleanup');
 const config = require('../config');
+const { getPresenceGracePeriodSeconds, isRecentCloseRequest } = require('../lib/presenceAccess');
+
+function buildDependencies(overrides = {}) {
+  const needsCleanupService = !overrides.cleanupSessionFn;
+  const needsRedisService =
+    !overrides.createSessionFn ||
+    !overrides.decrementTabsFn ||
+    !overrides.getSessionFn ||
+    !overrides.incrementTabsFn ||
+    !overrides.clearSessionCloseRequestedFn ||
+    !overrides.removeSessionExpiryFn ||
+    !overrides.setSessionExpiryFn ||
+    !overrides.updateLastSeenFn;
+  const redisService = needsRedisService ? require('../services/redis') : null;
+  const cleanupService = needsCleanupService ? require('../services/cleanup') : null;
+
+  return {
+    cleanupSessionFn: overrides.cleanupSessionFn || cleanupService.cleanupSession,
+    clearSessionCloseRequestedFn:
+      overrides.clearSessionCloseRequestedFn || redisService.clearSessionCloseRequested,
+    configValue: overrides.configValue || config,
+    createSessionFn: overrides.createSessionFn || redisService.createSession,
+    decrementTabsFn: overrides.decrementTabsFn || redisService.decrementTabs,
+    getSessionFn: overrides.getSessionFn || redisService.getSession,
+    incrementTabsFn: overrides.incrementTabsFn || redisService.incrementTabs,
+    removeSessionExpiryFn: overrides.removeSessionExpiryFn || redisService.removeSessionExpiry,
+    setSessionExpiryFn: overrides.setSessionExpiryFn || redisService.setSessionExpiry,
+    updateLastSeenFn: overrides.updateLastSeenFn || redisService.updateLastSeen,
+  };
+}
 
 // Track grace period timers: sessionId -> timeoutHandle
 const graceTimers = new Map();
@@ -21,98 +41,158 @@ function cancelGrace(sessionId) {
   }
 }
 
-function scheduleGrace(sessionId, io) {
+function scheduleGrace(sessionId, io, dependencies = {}) {
+  const needsCleanupService = !dependencies.cleanupSessionFn;
+  const needsRedisService =
+    !dependencies.getSessionFn ||
+    !dependencies.removeSessionExpiryFn ||
+    !dependencies.setSessionExpiryFn;
+  const redisService = needsRedisService ? require('../services/redis') : null;
+  const cleanupService = needsCleanupService ? require('../services/cleanup') : null;
+  const {
+    cleanupSessionFn = cleanupService.cleanupSession,
+    configValue = config,
+    getSessionFn = redisService.getSession,
+    removeSessionExpiryFn = redisService.removeSessionExpiry,
+    setSessionExpiryFn = redisService.setSessionExpiry,
+  } = dependencies;
+  const gracePeriodSeconds = getPresenceGracePeriodSeconds(configValue);
+
   cancelGrace(sessionId);
   const handle = setTimeout(async () => {
     graceTimers.delete(sessionId);
 
-    const session = await getSession(sessionId);
+    const session = await getSessionFn(sessionId);
     if (!session) {
       console.log(`[Presence] Grace period expired for missing session ${sessionId}`);
       return;
     }
 
     if (session.connectedTabs > 0) {
-      await removeSessionExpiry(sessionId);
+      await removeSessionExpiryFn(sessionId);
       console.log(`[Presence] Grace expired but session ${sessionId} is active again, skipping cleanup`);
       return;
     }
 
     const lastSeen = new Date(session.lastSeen);
     const ageSeconds = Math.floor((Date.now() - lastSeen.getTime()) / 1000);
-    const recentActivityWindow = config.limits.sessionGracePeriod + 5;
+    const recentActivityWindow = gracePeriodSeconds;
 
     if (ageSeconds <= recentActivityWindow) {
-      await setSessionExpiry(sessionId, config.limits.sessionGracePeriod + 5);
+      if (gracePeriodSeconds > 0) {
+        await setSessionExpiryFn(sessionId, gracePeriodSeconds);
+      }
       console.log(
         `[Presence] Grace expired for session ${sessionId}, but lastSeen is recent (${ageSeconds}s). Extending grace.`
       );
-      scheduleGrace(sessionId, io);
+      scheduleGrace(sessionId, io, dependencies);
       return;
     }
 
     console.log(`[Presence] Grace period expired for session ${sessionId}`);
-    await cleanupSession(sessionId);
-  }, config.limits.sessionGracePeriod * 1000);
+    await cleanupSessionFn(sessionId);
+  }, gracePeriodSeconds * 1000);
   graceTimers.set(sessionId, handle);
 }
 
-function registerPresenceHandlers(io) {
-  io.on('connection', async (socket) => {
-    let sessionId = socket.handshake.auth?.sessionId;
+function registerPresenceHandlers(io, dependencies = {}) {
+  const {
+    cleanupSessionFn,
+    configValue,
+    createSessionFn,
+    decrementTabsFn,
+    getSessionFn,
+    incrementTabsFn,
+    clearSessionCloseRequestedFn,
+    removeSessionExpiryFn,
+    setSessionExpiryFn,
+    updateLastSeenFn,
+  } = buildDependencies(dependencies);
+  const gracePeriodSeconds = getPresenceGracePeriodSeconds(configValue);
 
-    // Create or resume session
-    const existing = sessionId ? await getSession(sessionId) : null;
-    if (!existing) {
-      sessionId = nanoid(12);
-      await createSession(sessionId);
-    }
+  io.on('connection', (socket) => {
+    void (async () => {
+      let sessionId = socket.handshake.auth?.sessionId;
+      let shareId;
 
-    // Cancel any grace period for this session (e.g. page refresh reconnect)
-    cancelGrace(sessionId);
-    await removeSessionExpiry(sessionId);
+      try {
+        const existing = sessionId ? await getSessionFn(sessionId) : null;
+        if (!existing) {
+          sessionId = nanoid(12);
+          shareId = await createSessionFn(sessionId);
+        } else {
+          shareId = existing.shareId;
+        }
 
-    const tabCount = await incrementTabs(sessionId);
-    socket.join(`session:${sessionId}`);
-    socket.data.sessionId = sessionId;
+        cancelGrace(sessionId);
+        await clearSessionCloseRequestedFn(sessionId);
+        await removeSessionExpiryFn(sessionId);
 
-    socket.emit('session:created', { sessionId });
-    socket.emit('presence:status', { connectedTabs: tabCount });
+        const tabCount = await incrementTabsFn(sessionId);
+        socket.join(`session:${sessionId}`);
+        socket.data.sessionId = sessionId;
 
-    console.log(`[Presence] Socket ${socket.id} joined session ${sessionId} (tabs: ${tabCount})`);
+        socket.emit('session:created', { sessionId, shareId });
+        socket.emit('presence:status', { connectedTabs: tabCount });
 
-    socket.on('presence:ping', async () => {
-      await updateLastSeen(sessionId);
-      socket.emit('presence:pong');
-    });
+        console.log(`[Presence] Socket ${socket.id} joined session ${sessionId} (tabs: ${tabCount})`);
 
-    socket.on('presence:tab-visible', async () => {
-      await updateLastSeen(sessionId);
-    });
-
-    socket.on('presence:tab-hidden', async () => {
-      await updateLastSeen(sessionId);
-    });
-
-    socket.on('file:join', (fileId) => {
-      socket.join(`file:${fileId}`);
-    });
-
-    socket.on('disconnect', async () => {
-      const tabs = await decrementTabs(sessionId);
-      console.log(`[Presence] Socket ${socket.id} disconnected from session ${sessionId} (tabs: ${tabs})`);
-
-      if (tabs === 0) {
-        await setSessionExpiry(sessionId, config.limits.sessionGracePeriod + 5);
-
-        // Warn any remaining clients
-        io.to(`session:${sessionId}`).emit('session:expiring', {
-          secondsLeft: config.limits.sessionGracePeriod,
+        socket.on('presence:ping', async () => {
+          await updateLastSeenFn(sessionId);
+          socket.emit('presence:pong');
         });
 
-        scheduleGrace(sessionId, io);
+        socket.on('presence:tab-visible', async () => {
+          await updateLastSeenFn(sessionId);
+        });
+
+        socket.on('presence:tab-hidden', async () => {
+          await updateLastSeenFn(sessionId);
+        });
+
+        socket.on('file:join', (fileId) => {
+          socket.join(`file:${fileId}`);
+        });
+
+        socket.on('disconnect', async () => {
+          const tabs = await decrementTabsFn(sessionId);
+          console.log(`[Presence] Socket ${socket.id} disconnected from session ${sessionId} (tabs: ${tabs})`);
+
+          if (tabs === 0) {
+            const latestSession = await getSessionFn(sessionId);
+            if (isRecentCloseRequest(latestSession)) {
+              console.log(`[Presence] Explicit close detected for session ${sessionId}, cleaning up immediately`);
+              await cleanupSessionFn(sessionId);
+              return;
+            }
+
+            if (gracePeriodSeconds <= 0) {
+              console.log(`[Presence] No grace period configured for session ${sessionId}, cleaning up immediately`);
+              await cleanupSessionFn(sessionId);
+              return;
+            }
+
+            await setSessionExpiryFn(sessionId, gracePeriodSeconds);
+
+            io.to(`session:${sessionId}`).emit('session:expiring', {
+              secondsLeft: gracePeriodSeconds,
+            });
+
+            scheduleGrace(sessionId, io, {
+              cleanupSessionFn,
+              configValue,
+              getSessionFn,
+              removeSessionExpiryFn,
+              setSessionExpiryFn,
+            });
+          }
+        });
+      } catch (err) {
+        console.error(`[Presence] Failed to initialize socket ${socket.id}:`, err.message);
+        socket.emit('session:error', { message: 'Failed to initialize secure session. Please refresh and try again.' });
+        socket.disconnect(true);
       }
-    });
+    })();
   });
 }
 

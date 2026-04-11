@@ -10,8 +10,8 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<HomePage />} />
-          <Route path="/share/:fileId" element={<SharePage />} />
-          <Route path="/d/:fileId" element={<DownloadPage />} />
+          <Route path="/share/:shareId" element={<SharePage />} />
+          <Route path="/d/:shareId" element={<DownloadPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

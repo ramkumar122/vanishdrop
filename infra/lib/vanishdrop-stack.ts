@@ -9,6 +9,8 @@ export class VanishDropStack extends cdk.Stack {
     super(scope, id, props);
 
     const githubRepo = this.node.tryGetContext('githubRepo') || '*';
+    const serverAmiId =
+      this.node.tryGetContext('serverAmiId') || 'ami-0ea87431b78a82070';
 
     // ── S3: file uploads bucket ───────────────────────────────────────────
     const uploadsBucket = new s3.Bucket(this, 'UploadsBucket', {
@@ -30,6 +32,41 @@ export class VanishDropStack extends cdk.Stack {
           allowedMethods: [s3.HttpMethods.PUT, s3.HttpMethods.GET],
           allowedOrigins: ['*'],
           allowedHeaders: ['*'],
+          exposedHeaders: ['ETag'],
+          maxAge: 3000,
+        },
+      ],
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+    });
+
+    const testUploadsBucket = new s3.Bucket(this, 'TestUploadsBucket', {
+      bucketName: `vanishdrop-test-uploads-${this.account}`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      lifecycleRules: [
+        {
+          id: 'AutoDeleteTestUploads',
+          enabled: true,
+          prefix: 'integration-tests/',
+          expiration: cdk.Duration.days(3),
+          abortIncompleteMultipartUploadAfter: cdk.Duration.days(1),
+        },
+        {
+          id: 'AutoDeleteAppTestUploads',
+          enabled: true,
+          prefix: 'uploads/',
+          expiration: cdk.Duration.days(3),
+          abortIncompleteMultipartUploadAfter: cdk.Duration.days(1),
+        },
+      ],
+      cors: [
+        {
+          allowedMethods: [s3.HttpMethods.PUT, s3.HttpMethods.GET],
+          allowedOrigins: ['*'],
+          allowedHeaders: ['*'],
+          exposedHeaders: ['ETag'],
           maxAge: 3000,
         },
       ],
@@ -121,7 +158,11 @@ EOF`,
     const instance = new ec2.Instance(this, 'Server', {
       vpc,
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MICRO),
-      machineImage: ec2.MachineImage.latestAmazonLinux2023(),
+      // Pin the AMI so routine CDK deploys do not replace the instance when AWS
+      // publishes a newer "latest" Amazon Linux image.
+      machineImage: ec2.MachineImage.genericLinux({
+        [this.region]: serverAmiId,
+      }),
       securityGroup: sg,
       role: ec2Role,
       userData,
@@ -143,7 +184,10 @@ EOF`,
         githubProvider.openIdConnectProviderArn,
         {
           StringLike: {
-            'token.actions.githubusercontent.com:sub': `repo:${githubRepo}:ref:refs/heads/main`,
+            'token.actions.githubusercontent.com:sub': [
+              `repo:${githubRepo}:ref:refs/heads/*`,
+              `repo:${githubRepo}:pull_request`,
+            ],
           },
           StringEquals: {
             'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
@@ -154,6 +198,8 @@ EOF`,
 
     // GitHub Actions: upload zip to S3 + send deploy command to EC2 via SSM
     deployBucket.grantReadWrite(githubActionsRole);
+    testUploadsBucket.grantReadWrite(githubActionsRole);
+    testUploadsBucket.grantDelete(githubActionsRole);
     githubActionsRole.addToPolicy(
       new iam.PolicyStatement({
         actions: [
@@ -177,6 +223,10 @@ EOF`,
 
     new cdk.CfnOutput(this, 'UploadsBucketName', {
       value: uploadsBucket.bucketName,
+    });
+
+    new cdk.CfnOutput(this, 'TestUploadsBucketName', {
+      value: testUploadsBucket.bucketName,
     });
 
     new cdk.CfnOutput(this, 'DeployBucketName', {
