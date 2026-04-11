@@ -80,7 +80,6 @@ async function putObjectViaPresignedUrl(storageKey, contents, mimeType = 'text/p
   const response = await fetch(uploadUrl, {
     method: 'PUT',
     headers: {
-      'Content-Length': String(body.length),
       'Content-Type': mimeType,
     },
     body,
@@ -250,7 +249,6 @@ describe('production-style infrastructure verification', () => {
       const putResponse = await fetch(uploadUrl, {
         method: 'PUT',
         headers: {
-          'Content-Length': String(upload.contents.length),
           'Content-Type': 'text/plain',
         },
         body: upload.contents,

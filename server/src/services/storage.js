@@ -33,7 +33,6 @@ async function generateUploadUrl(storageKey, mimeType, fileSize) {
     Bucket: config.s3.bucket,
     Key: storageKey,
     ContentType: mimeType,
-    ContentLength: fileSize,
   });
 
   const url = await getSignedUrl(s3, command, {
