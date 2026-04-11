@@ -23,6 +23,7 @@ if (config.s3.accessKeyId && config.s3.secretAccessKey) {
   s3Config.credentials = {
     accessKeyId: config.s3.accessKeyId,
     secretAccessKey: config.s3.secretAccessKey,
+    ...(config.s3.sessionToken && { sessionToken: config.s3.sessionToken }),
   };
 }
 
