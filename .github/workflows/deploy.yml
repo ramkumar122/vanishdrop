@@ -49,7 +49,7 @@ jobs:
 
       - name: Deploy to EC2 via SSM
         run: |
-          ENV_B64=$(printf 'NODE_ENV=production\nPORT=3001\nREDIS_URL=%s\nS3_BUCKET=%s\nS3_REGION=%s\nCORS_ORIGIN=%s\nMAX_FILE_SIZE=10737418240\nUPLOAD_RATE_LIMIT=10\nSESSION_GRACE_PERIOD=5\nPRESIGNED_URL_EXPIRY=3600\nDOWNLOAD_URL_EXPIRY=300\n' \
+          ENV_B64=$(printf 'NODE_ENV=production\nPORT=3001\nREDIS_URL=%s\nS3_BUCKET=%s\nS3_REGION=%s\nCORS_ORIGIN=%s\nMAX_FILE_SIZE=10737418240\nUPLOAD_RATE_LIMIT=100\nSESSION_GRACE_PERIOD=5\nPRESIGNED_URL_EXPIRY=3600\nDOWNLOAD_URL_EXPIRY=300\n' \
             '${{ secrets.REDIS_URL }}' \
             '${{ secrets.S3_BUCKET }}' \
             '${{ secrets.AWS_REGION }}' \

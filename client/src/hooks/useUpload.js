@@ -134,6 +134,8 @@ export function useUpload(sessionId) {
 
       try {
         for (const file of files) {
+          const uploadMimeType = file.type || 'application/octet-stream';
+
           setState((current) => ({
             ...current,
             currentFileName: file.name,
@@ -143,7 +145,7 @@ export function useUpload(sessionId) {
           const uploadTarget = await initiateUpload({
             fileName: file.name,
             fileSize: file.size,
-            mimeType: file.type || 'application/octet-stream',
+            mimeType: uploadMimeType,
             sessionId,
             expiryMode: resolvedExpiryMode,
             expirySeconds: resolvedExpirySeconds,
@@ -179,7 +181,7 @@ export function useUpload(sessionId) {
 
             await completeUpload(uploadTarget.fileId, sessionId, parts);
           } else {
-            await uploadToS3(uploadTarget.uploadUrl, file, onProgress);
+            await uploadToS3(uploadTarget.uploadUrl, file, uploadMimeType, onProgress);
 
             setState((current) => ({
               ...current,

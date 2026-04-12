@@ -102,7 +102,7 @@ export async function downloadFile(fileId, fallbackFileName) {
   window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1000);
 }
 
-export async function uploadToS3(uploadUrl, file, onProgress) {
+export async function uploadToS3(uploadUrl, file, mimeType, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
 
@@ -124,7 +124,7 @@ export async function uploadToS3(uploadUrl, file, onProgress) {
     xhr.addEventListener('abort', () => reject(new Error('Upload aborted')));
 
     xhr.open('PUT', uploadUrl);
-    xhr.setRequestHeader('Content-Type', file.type);
+    xhr.setRequestHeader('Content-Type', mimeType);
     xhr.send(file);
   });
 }
