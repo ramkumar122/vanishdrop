@@ -30,6 +30,15 @@ function formatFileSizeInGb(bytes) {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)}GB`;
 }
 
+function clampProgress(loadedBytes, totalBytes) {
+  if (totalBytes <= 0) {
+    return 0;
+  }
+
+  const safeLoadedBytes = Math.min(totalBytes, Math.max(0, loadedBytes));
+  return Math.min(100, Math.max(0, Math.round((safeLoadedBytes / totalBytes) * 100)));
+}
+
 export function useUpload(sessionId) {
   const [state, setState] = useState(initialState);
 
@@ -157,11 +166,11 @@ export function useUpload(sessionId) {
           }
 
           const onProgress = (loaded, total) => {
-            const aggregateLoaded = uploadedBytesBeforeCurrent + loaded;
+            const aggregateLoaded = Math.min(totalBytes, uploadedBytesBeforeCurrent + loaded);
             setState((current) => ({
               ...current,
               bytesUploaded: aggregateLoaded,
-              progress: totalBytes === 0 ? 0 : Math.round((aggregateLoaded / totalBytes) * 100),
+              progress: clampProgress(aggregateLoaded, totalBytes),
               totalBytes,
             }));
           };
@@ -198,7 +207,7 @@ export function useUpload(sessionId) {
             ...current,
             bytesUploaded: uploadedBytesBeforeCurrent,
             completedFiles,
-            progress: totalBytes === 0 ? 0 : Math.round((uploadedBytesBeforeCurrent / totalBytes) * 100),
+            progress: clampProgress(uploadedBytesBeforeCurrent, totalBytes),
             status: completedFiles === files.length ? 'done' : 'uploading',
           }));
         }

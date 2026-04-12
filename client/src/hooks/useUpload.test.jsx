@@ -93,4 +93,29 @@ describe('useUpload', () => {
       expiryMode: 'presence',
     });
   });
+
+  it('clamps aggregate progress to 100 percent when upload progress events over-report bytes', async () => {
+    vi.mocked(initiateUpload).mockResolvedValue({
+      fileId: 'file-1',
+      shareId: 'share-123',
+      shareLink: 'https://vanishdrop.app/d/share-123',
+      uploadType: 'single',
+      uploadUrl: 'https://example.com/upload/file-1',
+    });
+
+    vi.mocked(uploadToS3).mockImplementation(async (_url, file, _mimeType, onProgress) => {
+      onProgress?.(file.size * 2, file.size);
+    });
+
+    const file = new File(['hello world'], 'notes.txt', { type: 'text/plain' });
+    const { result } = renderHook(() => useUpload('session-123'));
+
+    await act(async () => {
+      await result.current.uploadFiles([file], { mode: 'presence' });
+    });
+
+    expect(result.current.progress).toBe(100);
+    expect(result.current.bytesUploaded).toBe(file.size);
+    expect(result.current.status).toBe('done');
+  });
 });

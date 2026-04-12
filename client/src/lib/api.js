@@ -3,6 +3,9 @@ import axios from 'axios';
 const BASE_URL = import.meta.env.VITE_API_URL || '';
 const DEFAULT_API_TIMEOUT_MS = 10_000;
 const COMPLETE_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
+const MULTIPART_PART_UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
+const MULTIPART_MAX_CONCURRENCY = 4;
+const MULTIPART_MAX_RETRIES = 3;
 
 const api = axios.create({
   baseURL: `${BASE_URL}/api`,
@@ -138,6 +141,7 @@ export async function uploadToS3(uploadUrl, file, mimeType, onProgress) {
 function uploadPartToS3(uploadUrl, blob, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    xhr.timeout = MULTIPART_PART_UPLOAD_TIMEOUT_MS;
 
     xhr.upload.addEventListener('progress', (e) => {
       if (e.lengthComputable) {
@@ -161,35 +165,81 @@ function uploadPartToS3(uploadUrl, blob, onProgress) {
 
     xhr.addEventListener('error', () => reject(new Error('Network error during multipart upload')));
     xhr.addEventListener('abort', () => reject(new Error('Multipart upload aborted')));
+    xhr.addEventListener('timeout', () => reject(new Error('Multipart upload timed out')));
 
     xhr.open('PUT', uploadUrl);
     xhr.send(blob);
   });
 }
 
-export async function uploadMultipartToS3({ file, partSize, partUrls, onProgress }) {
-  const completedParts = [];
-  let uploadedBytes = 0;
+async function uploadMultipartPartWithRetry(part, onProgress) {
+  let lastError;
 
-  for (const part of partUrls) {
-    const start = (part.partNumber - 1) * partSize;
-    const end = Math.min(start + partSize, file.size);
-    const chunk = file.slice(start, end);
+  for (let attempt = 1; attempt <= MULTIPART_MAX_RETRIES; attempt += 1) {
+    try {
+      onProgress?.(0, part.chunk.size);
+      return await uploadPartToS3(part.uploadUrl, part.chunk, onProgress);
+    } catch (error) {
+      lastError = error;
 
-    const etag = await uploadPartToS3(part.uploadUrl, chunk, (loaded) => {
-      onProgress?.(uploadedBytes + loaded, file.size);
-    });
-
-    uploadedBytes += chunk.size;
-    onProgress?.(uploadedBytes, file.size);
-
-    completedParts.push({
-      ETag: etag,
-      PartNumber: part.partNumber,
-    });
+      if (attempt === MULTIPART_MAX_RETRIES) {
+        break;
+      }
+    }
   }
 
-  return completedParts;
+  throw lastError;
+}
+
+export async function uploadMultipartToS3({ file, partSize, partUrls, onProgress }) {
+  const completedParts = [];
+  const parts = partUrls.map((part) => {
+    const start = (part.partNumber - 1) * partSize;
+    const end = Math.min(start + partSize, file.size);
+
+    return {
+      ...part,
+      chunk: file.slice(start, end),
+    };
+  });
+  const loadedByPart = new Map(parts.map((part) => [part.partNumber, 0]));
+  let nextIndex = 0;
+
+  const reportProgress = () => {
+    let totalLoaded = 0;
+
+    for (const part of parts) {
+      totalLoaded += loadedByPart.get(part.partNumber) || 0;
+    }
+
+    onProgress?.(Math.min(file.size, totalLoaded), file.size);
+  };
+
+  const worker = async () => {
+    while (nextIndex < parts.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+
+      const part = parts[currentIndex];
+      const etag = await uploadMultipartPartWithRetry(part, (loaded) => {
+        loadedByPart.set(part.partNumber, Math.min(part.chunk.size, loaded));
+        reportProgress();
+      });
+
+      loadedByPart.set(part.partNumber, part.chunk.size);
+      reportProgress();
+
+      completedParts.push({
+        ETag: etag,
+        PartNumber: part.partNumber,
+      });
+    }
+  };
+
+  const workerCount = Math.min(MULTIPART_MAX_CONCURRENCY, parts.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+  return completedParts.sort((a, b) => a.PartNumber - b.PartNumber);
 }
 
 export default api;
