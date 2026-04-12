@@ -1,4 +1,8 @@
 const config = require('../config');
+const {
+  InvalidExpirySelectionError,
+  resolveExpirySelection,
+} = require('../lib/expiry');
 
 function validateUpload(req, res, next) {
   const { fileName, fileSize, mimeType, sessionId } = req.body;
@@ -31,10 +35,15 @@ function validateUpload(req, res, next) {
     return res.status(400).json({ error: 'sessionId is required' });
   }
 
-  const { expiryMode } = req.body;
-  const validExpiry = ['presence', '1h', '4h', '24h'];
-  if (expiryMode !== undefined && !validExpiry.includes(expiryMode)) {
-    return res.status(400).json({ error: `expiryMode must be one of: ${validExpiry.join(', ')}` });
+  const { expiryMode, expirySeconds } = req.body;
+  try {
+    resolveExpirySelection({ expiryMode, expirySeconds });
+  } catch (err) {
+    if (err instanceof InvalidExpirySelectionError) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    throw err;
   }
 
   next();

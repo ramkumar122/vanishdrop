@@ -28,7 +28,14 @@ function sanitizeFileName(fileName) {
 }
 
 router.post('/', uploadRateLimit, validateUpload, async (req, res) => {
-  const { fileName, fileSize, mimeType, sessionId, expiryMode = 'presence' } = req.body;
+  const {
+    fileName,
+    fileSize,
+    mimeType,
+    sessionId,
+    expiryMode = 'presence',
+    expirySeconds,
+  } = req.body;
 
   try {
     const session = await getSession(sessionId);
@@ -56,6 +63,7 @@ router.post('/', uploadRateLimit, validateUpload, async (req, res) => {
       sessionId,
       shareId: session.shareId,
       expiryMode,
+      expirySeconds,
       uploadType: uploadTarget.uploadType,
       uploadId: uploadTarget.uploadId,
     });

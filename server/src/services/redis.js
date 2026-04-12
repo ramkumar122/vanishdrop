@@ -1,6 +1,7 @@
 const { nanoid } = require('nanoid');
 const Redis = require('ioredis');
 const config = require('../config');
+const { resolveExpirySelection } = require('../lib/expiry');
 
 const isTLS = config.redis.url.startsWith('rediss://');
 
@@ -17,14 +18,12 @@ redis.on('connect', () => console.log('[Redis] Connected'));
 
 const FILE_TTL = 86400; // 24h safety net
 
-const EXPIRY_SECONDS = { '1h': 3600, '4h': 14400, '24h': 86400 };
-
 async function createFile(fileId, metadata) {
   const key = `file:${fileId}`;
-  const expiryMode = metadata.expiryMode || 'presence';
-  const expiresAt = EXPIRY_SECONDS[expiryMode]
-    ? new Date(Date.now() + EXPIRY_SECONDS[expiryMode] * 1000).toISOString()
-    : '';
+  const resolvedExpiry = resolveExpirySelection({
+    expiryMode: metadata.expiryMode,
+    expirySeconds: metadata.expirySeconds,
+  });
   const payload = {
     fileName: metadata.fileName,
     fileSize: String(metadata.fileSize),
@@ -33,8 +32,8 @@ async function createFile(fileId, metadata) {
     sessionId: metadata.sessionId,
     uploadedAt: new Date().toISOString(),
     status: 'uploading',
-    expiryMode,
-    expiresAt,
+    expiryMode: resolvedExpiry.expiryMode,
+    expiresAt: resolvedExpiry.expiresAt,
     uploadType: metadata.uploadType || 'single',
   };
   if (metadata.shareId) {
@@ -45,7 +44,7 @@ async function createFile(fileId, metadata) {
   }
 
   await redis.hset(key, payload);
-  const ttl = EXPIRY_SECONDS[expiryMode] || FILE_TTL;
+  const ttl = resolvedExpiry.ttlSeconds || FILE_TTL;
   await redis.expire(key, ttl + 300); // small buffer over the actual expiry
 }
 
@@ -238,6 +237,21 @@ async function scanOrphanedSessions() {
   return sessions;
 }
 
+async function scanPendingDeletionFiles() {
+  const keys = await redis.keys('file:*');
+  const fileIds = [];
+
+  for (const key of keys) {
+    const fileId = key.replace('file:', '');
+    const data = await getFile(fileId);
+    if (data && (data.status === 'deleting' || data.status === 'delete_failed')) {
+      fileIds.push(fileId);
+    }
+  }
+
+  return fileIds;
+}
+
 module.exports = {
   redis,
   createFile,
@@ -264,4 +278,5 @@ module.exports = {
   clearActiveDownload,
   clearActiveDownloads,
   scanOrphanedSessions,
+  scanPendingDeletionFiles,
 };

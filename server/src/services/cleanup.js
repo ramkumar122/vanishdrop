@@ -7,11 +7,39 @@ const {
   updateFileStatus,
   clearActiveDownloads,
   scanOrphanedSessions,
+  scanPendingDeletionFiles,
 } = require('./redis');
 const { deleteObject } = require('./storage');
 const { abortActiveDownloads } = require('./downloads');
 
 let ioInstance = null;
+const deletionRetryTimers = new Map();
+
+function clearDeletionRetry(fileId) {
+  const timer = deletionRetryTimers.get(fileId);
+  if (!timer) {
+    return;
+  }
+
+  clearTimeout(timer);
+  deletionRetryTimers.delete(fileId);
+}
+
+function scheduleDeletionRetry(fileId, delayMs = 30000) {
+  if (deletionRetryTimers.has(fileId)) {
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    deletionRetryTimers.delete(fileId);
+    cleanupFile(fileId).catch((err) => {
+      console.error(`[Cleanup] Retry failed for file ${fileId}:`, err.message);
+    });
+  }, delayMs);
+
+  deletionRetryTimers.set(fileId, timer);
+  console.log(`[Cleanup] Scheduled delete retry for file ${fileId} in ${Math.round(delayMs / 1000)}s`);
+}
 
 function setIo(io) {
   ioInstance = io;
@@ -34,9 +62,11 @@ async function cleanupFile(fileId, retries = 3) {
   await updateFileStatus(fileId, 'deleting');
 
   let attempt = 0;
+  let deletedFromStorage = false;
   while (attempt < retries) {
     try {
       await deleteObject(file.storageKey);
+      deletedFromStorage = true;
       break;
     } catch (err) {
       attempt++;
@@ -49,14 +79,22 @@ async function cleanupFile(fileId, retries = 3) {
     }
   }
 
+  if (!deletedFromStorage) {
+    await updateFileStatus(fileId, 'delete_failed');
+    scheduleDeletionRetry(fileId);
+    return false;
+  }
+
   await deleteFile(fileId);
   await removeFileFromShare(file.shareId, fileId);
+  clearDeletionRetry(fileId);
 
   if (ioInstance) {
     ioInstance.to(`file:${fileId}`).emit('file:deleted', { fileId });
   }
 
   console.log(`[Cleanup] Deleted file ${fileId}`);
+  return true;
 }
 
 // Schedule timed-expiry cleanup for a file
@@ -100,6 +138,12 @@ async function cleanupOrphanedSessions() {
     await cleanupSession(sessionId);
   }
   console.log(`[Cleanup] Orphan scan complete. Found ${orphaned.length} orphaned sessions.`);
+
+  const pendingDeletionFiles = await scanPendingDeletionFiles();
+  for (const fileId of pendingDeletionFiles) {
+    console.log(`[Cleanup] Retrying pending deletion for file ${fileId}`);
+    await cleanupFile(fileId);
+  }
 }
 
 module.exports = { cleanupSession, cleanupFile, cleanupOrphanedSessions, scheduleTimedCleanup, setIo };

@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { createContext, createElement, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { getOrCreateSessionId, saveSessionId } from '../lib/utils.js';
 
-export function useSocket() {
+const SocketContext = createContext(null);
+
+function useProvideSocket() {
   const socketRef = useRef(null);
   const [sessionId, setSessionId] = useState(getOrCreateSessionId());
   const sessionIdRef = useRef(sessionId);
@@ -120,4 +122,18 @@ export function useSocket() {
   }, []);
 
   return { socket: socketRef.current, sessionId, connected, sessionReady, sessionError, status, on, emit, joinRoom };
+}
+
+export function SocketProvider({ children }) {
+  const value = useProvideSocket();
+  return createElement(SocketContext.Provider, { value }, children);
+}
+
+export function useSocket() {
+  const context = useContext(SocketContext);
+  if (!context) {
+    throw new Error('useSocket must be used within a SocketProvider');
+  }
+
+  return context;
 }

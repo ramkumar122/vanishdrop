@@ -6,11 +6,9 @@ import { usePresence } from '../hooks/usePresence.js';
 import DropZone from '../components/DropZone.jsx';
 import UploadProgress from '../components/UploadProgress.jsx';
 
-const EXPIRY_OPTIONS = [
-  { value: 'presence', label: 'While tab is open', description: 'Deleted the moment you close this tab' },
-  { value: '1h',       label: '1 hour',            description: 'Auto-deleted after 1 hour' },
-  { value: '4h',       label: '4 hours',           description: 'Auto-deleted after 4 hours' },
-  { value: '24h',      label: '24 hours',          description: 'Auto-deleted after 24 hours' },
+const TIME_UNIT_OPTIONS = [
+  { value: 'minutes', label: 'minutes', seconds: 60, min: 1, max: 1440 },
+  { value: 'hours', label: 'hours', seconds: 3600, min: 1, max: 24 },
 ];
 
 export default function HomePage() {
@@ -31,6 +29,8 @@ export default function HomePage() {
   } = useUpload(sessionId);
 
   const [expiryMode, setExpiryMode] = useState('presence');
+  const [customExpiryValue, setCustomExpiryValue] = useState('1');
+  const [customExpiryUnit, setCustomExpiryUnit] = useState('hours');
 
   usePresence(emit, connected);
 
@@ -42,6 +42,40 @@ export default function HomePage() {
 
   const isUploading = uploadStatus === 'uploading' || uploadStatus === 'completing';
   const uploadReady = connected && sessionReady;
+  const selectedUnit = TIME_UNIT_OPTIONS.find((option) => option.value === customExpiryUnit) || TIME_UNIT_OPTIONS[1];
+  const customExpirySeconds = Number(customExpiryValue) * selectedUnit.seconds;
+  const customTimerIsValid =
+    Number.isInteger(Number(customExpiryValue)) &&
+    Number(customExpiryValue) >= selectedUnit.min &&
+    Number(customExpiryValue) <= selectedUnit.max;
+
+  function buildExpirySelection() {
+    if (expiryMode === 'presence') {
+      return { mode: 'presence' };
+    }
+
+    return {
+      mode: 'timed',
+      seconds: customExpirySeconds,
+    };
+  }
+
+  function handleCustomUnitChange(nextUnit) {
+    const option = TIME_UNIT_OPTIONS.find((entry) => entry.value === nextUnit);
+    if (!option) {
+      return;
+    }
+
+    setCustomExpiryUnit(nextUnit);
+    setCustomExpiryValue((current) => {
+      const numeric = Number(current);
+      if (!Number.isInteger(numeric)) {
+        return String(option.min);
+      }
+
+      return String(Math.min(Math.max(numeric, option.min), option.max));
+    });
+  }
 
   return (
     <div className="w-full max-w-lg animate-fade-in">
@@ -65,27 +99,81 @@ export default function HomePage() {
           />
         ) : (
           <>
-            <DropZone onFiles={(files) => uploadFiles(files, expiryMode)} disabled={!uploadReady} />
+            <DropZone
+              onFiles={(files) => uploadFiles(files, buildExpirySelection())}
+              disabled={!uploadReady}
+            />
 
             <div>
               <p className="text-xs text-gray-500 uppercase tracking-wider mb-2 font-medium">
                 Delete after
               </p>
-              <div className="grid grid-cols-2 gap-2">
-                {EXPIRY_OPTIONS.map((opt) => (
+              <div className="space-y-3">
+                <button
+                  onClick={() => setExpiryMode('presence')}
+                  className={`w-full text-left px-4 py-3 rounded-xl border transition-colors ${
+                    expiryMode === 'presence'
+                      ? 'border-indigo-500 bg-indigo-950/50 text-white'
+                      : 'border-gray-700 bg-gray-800/40 text-gray-400 hover:border-gray-500 hover:text-gray-200'
+                  }`}
+                >
+                  <span className="font-medium block">While tab is open</span>
+                  <span className="text-xs opacity-60">Deleted the moment you close this tab</span>
+                </button>
+
+                <div
+                  className={`rounded-xl border p-4 transition-colors ${
+                    expiryMode === 'timed'
+                      ? 'border-indigo-500 bg-indigo-950/40'
+                      : 'border-gray-700 bg-gray-800/30'
+                  }`}
+                >
                   <button
-                    key={opt.value}
-                    onClick={() => setExpiryMode(opt.value)}
-                    className={`text-left px-3 py-2.5 rounded-xl border text-sm transition-colors ${
-                      expiryMode === opt.value
-                        ? 'border-indigo-500 bg-indigo-950/50 text-white'
-                        : 'border-gray-700 bg-gray-800/40 text-gray-400 hover:border-gray-500 hover:text-gray-200'
-                    }`}
+                    onClick={() => setExpiryMode('timed')}
+                    className="w-full text-left"
                   >
-                    <span className="font-medium block">{opt.label}</span>
-                    <span className="text-xs opacity-60">{opt.description}</span>
+                    <span className={`font-medium block ${expiryMode === 'timed' ? 'text-white' : 'text-gray-300'}`}>
+                      Set your own timer
+                    </span>
+                    <span className="text-xs text-gray-500">Choose any duration from 1 minute up to 24 hours</span>
                   </button>
-                ))}
+
+                  <div className="mt-3 flex gap-2">
+                    <input
+                      type="number"
+                      min={selectedUnit.min}
+                      max={selectedUnit.max}
+                      value={customExpiryValue}
+                      onChange={(e) => {
+                        setExpiryMode('timed');
+                        setCustomExpiryValue(e.target.value);
+                      }}
+                      className="w-32 rounded-xl border border-gray-700 bg-gray-900 px-3 py-2 text-white focus:border-indigo-500 focus:outline-none"
+                      aria-label="Custom delete timer value"
+                    />
+                    <select
+                      value={customExpiryUnit}
+                      onChange={(e) => {
+                        setExpiryMode('timed');
+                        handleCustomUnitChange(e.target.value);
+                      }}
+                      className="flex-1 rounded-xl border border-gray-700 bg-gray-900 px-3 py-2 text-white focus:border-indigo-500 focus:outline-none"
+                      aria-label="Custom delete timer unit"
+                    >
+                      {TIME_UNIT_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <p className="mt-2 text-xs text-gray-500">
+                    {customTimerIsValid
+                      ? `Files will auto-delete ${customExpiryUnit === 'hours' ? `after ${customExpiryValue} hour${customExpiryValue === '1' ? '' : 's'}` : `after ${customExpiryValue} minute${customExpiryValue === '1' ? '' : 's'}`}.`
+                      : `Choose a value between ${selectedUnit.min} and ${selectedUnit.max} ${selectedUnit.label}.`}
+                  </p>
+                </div>
               </div>
             </div>
           </>

@@ -19,9 +19,17 @@ async function waitForDownloads(page, action, expectedCount) {
   }
 }
 
-async function uploadPresenceFiles(page, files) {
+async function uploadFiles(page, files, expirySelection = { mode: 'presence' }) {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'Choose Files' })).toBeVisible();
+  await expect(page.getByText('Delete after', { exact: true })).toBeVisible();
+  await expect(page.locator('input[type="file"]')).toHaveCount(1);
+
+  if (expirySelection.mode === 'timed') {
+    await page.getByRole('button', { name: 'Set your own timer' }).click();
+    await page.getByLabel('Custom delete timer value').fill(String(expirySelection.value));
+    await page.getByLabel('Custom delete timer unit').selectOption(expirySelection.unit);
+    await expect(page.getByText(`Files will auto-delete after ${expirySelection.value} ${expirySelection.unit === 'hours' ? `hour${expirySelection.value === 1 ? '' : 's'}` : `minute${expirySelection.value === 1 ? '' : 's'}`}.`)).toBeVisible();
+  }
 
   await page.setInputFiles(
     'input[type="file"]',
@@ -53,7 +61,7 @@ test('uploads one link with multiple files and supports selective download', asy
     { name: 'notes.txt', content: 'notes from playwright' },
   ];
 
-  const downloadUrl = await uploadPresenceFiles(uploaderPage, files);
+  const downloadUrl = await uploadFiles(uploaderPage, files);
 
   const downloaderContext = await browser.newContext({ acceptDownloads: true });
   const downloaderPage = await downloaderContext.newPage();
@@ -91,7 +99,7 @@ test('uploads one link with multiple files and supports selective download', asy
 test('makes a multi-file presence share vanish when the uploader disconnects', async ({ browser }) => {
   const uploaderContext = await browser.newContext();
   const uploaderPage = await uploaderContext.newPage();
-  const downloadUrl = await uploadPresenceFiles(uploaderPage, [
+  const downloadUrl = await uploadFiles(uploaderPage, [
     { name: 'vanish-a.txt', content: 'bye a' },
     { name: 'vanish-b.txt', content: 'bye b' },
   ]);
@@ -108,4 +116,26 @@ test('makes a multi-file presence share vanish when the uploader disconnects', a
   await expect(downloaderPage.getByText('This share has vanished')).toBeVisible();
 
   await downloaderContext.close();
+});
+
+test('lets the uploader choose a custom timed delete window', async ({ browser }) => {
+  const uploaderContext = await browser.newContext();
+  const uploaderPage = await uploaderContext.newPage();
+  const downloadUrl = await uploadFiles(
+    uploaderPage,
+    [{ name: 'timed.txt', content: 'timed payload' }],
+    { mode: 'timed', unit: 'minutes', value: 15 }
+  );
+
+  await expect(uploaderPage.getByText(/Auto-deletes in/)).toBeVisible();
+
+  const downloaderContext = await browser.newContext();
+  const downloaderPage = await downloaderContext.newPage();
+
+  await downloaderPage.goto(downloadUrl);
+  await expect(downloaderPage.getByText('timed.txt')).toBeVisible();
+  await expect(downloaderPage.getByText(/Auto-deletes in/)).toBeVisible();
+
+  await downloaderContext.close();
+  await uploaderContext.close();
 });

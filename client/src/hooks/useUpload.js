@@ -7,6 +7,8 @@ import {
 } from '../lib/api.js';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024; // 10GB
+const MIN_TIMED_EXPIRY_SECONDS = 60;
+const MAX_TIMED_EXPIRY_SECONDS = 24 * 60 * 60;
 
 function initialState() {
   return {
@@ -36,7 +38,7 @@ export function useUpload(sessionId) {
   }, []);
 
   const uploadFiles = useCallback(
-    async (files, expiryMode = 'presence') => {
+    async (files, expirySelection = { mode: 'presence' }) => {
       if (!sessionId) {
         setState((current) => ({
           ...current,
@@ -75,6 +77,39 @@ export function useUpload(sessionId) {
         }
       }
 
+      const resolvedExpiryMode = expirySelection?.mode || 'presence';
+      const resolvedExpirySeconds =
+        resolvedExpiryMode === 'timed' ? Number(expirySelection?.seconds) : null;
+
+      if (resolvedExpiryMode === 'timed') {
+        if (!Number.isInteger(resolvedExpirySeconds)) {
+          setState((current) => ({
+            ...current,
+            status: 'error',
+            error: 'Choose a valid custom timer before uploading.',
+          }));
+          return null;
+        }
+
+        if (resolvedExpirySeconds < MIN_TIMED_EXPIRY_SECONDS) {
+          setState((current) => ({
+            ...current,
+            status: 'error',
+            error: 'Custom timers must be at least 1 minute.',
+          }));
+          return null;
+        }
+
+        if (resolvedExpirySeconds > MAX_TIMED_EXPIRY_SECONDS) {
+          setState((current) => ({
+            ...current,
+            status: 'error',
+            error: 'Custom timers can be up to 24 hours.',
+          }));
+          return null;
+        }
+      }
+
       const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
 
       setState((current) => ({
@@ -86,7 +121,7 @@ export function useUpload(sessionId) {
         error: null,
         shareId: null,
         shareLink: null,
-        expiryMode,
+        expiryMode: resolvedExpiryMode,
         completedFiles: 0,
         totalFiles: files.length,
         currentFileName: files[0]?.name || null,
@@ -110,7 +145,8 @@ export function useUpload(sessionId) {
             fileSize: file.size,
             mimeType: file.type || 'application/octet-stream',
             sessionId,
-            expiryMode,
+            expiryMode: resolvedExpiryMode,
+            expirySeconds: resolvedExpirySeconds,
           });
 
           if (!shareId) {
@@ -174,10 +210,10 @@ export function useUpload(sessionId) {
           currentFileName: null,
           shareId,
           shareLink,
-          expiryMode,
+          expiryMode: resolvedExpiryMode,
         }));
 
-        return { shareId, shareLink, expiryMode };
+        return { shareId, shareLink, expiryMode: resolvedExpiryMode };
       } catch (err) {
         const message = err.response?.data?.error || err.message || 'Upload failed';
         setState((current) => ({

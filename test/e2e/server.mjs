@@ -18,7 +18,6 @@ if (!fs.existsSync(path.join(clientDistPath, 'index.html'))) {
   process.exit(1);
 }
 
-const EXPIRY_SECONDS = { '1h': 3600, '4h': 14400, '24h': 86400 };
 const SESSION_GRACE_PERIOD_MS = 2_000;
 const sessions = new Map();
 const shareIndex = new Map();
@@ -42,6 +41,24 @@ function createId(length = 12) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function resolveExpiry(expiryMode = 'presence', expirySeconds) {
+  if (expiryMode === 'presence') {
+    return { expiresAt: '', expiryMode: 'presence' };
+  }
+
+  const legacyExpiries = { '1h': 3600, '4h': 14400, '24h': 86400 };
+  const ttlSeconds = expiryMode === 'timed' ? Number(expirySeconds) : legacyExpiries[expiryMode];
+
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds <= 0) {
+    return { expiresAt: '', expiryMode: 'presence' };
+  }
+
+  return {
+    expiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
+    expiryMode: 'timed',
+  };
 }
 
 function createSession(id = createId()) {
@@ -136,7 +153,7 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.post('/api/upload', (req, res) => {
-  const { expiryMode = 'presence', fileName, fileSize, mimeType, sessionId } = req.body;
+  const { expiryMode = 'presence', expirySeconds, fileName, fileSize, mimeType, sessionId } = req.body;
   const session = getSessionById(sessionId);
 
   if (!session || session.connectedTabs <= 0) {
@@ -144,13 +161,11 @@ app.post('/api/upload', (req, res) => {
   }
 
   const fileId = createId(8);
-  const expiresAt = EXPIRY_SECONDS[expiryMode]
-    ? new Date(Date.now() + EXPIRY_SECONDS[expiryMode] * 1000).toISOString()
-    : '';
+  const resolvedExpiry = resolveExpiry(expiryMode, expirySeconds);
   const file = {
     content: null,
-    expiryMode,
-    expiresAt,
+    expiryMode: resolvedExpiry.expiryMode,
+    expiresAt: resolvedExpiry.expiresAt,
     fileId,
     fileName,
     fileSize,
@@ -164,7 +179,7 @@ app.post('/api/upload', (req, res) => {
 
   return res.json({
     expiresIn: 3600,
-    expiryMode,
+    expiryMode: resolvedExpiry.expiryMode,
     fileId,
     shareId: session.shareId,
     shareLink: `${getOrigin(req)}/d/${session.shareId}`,

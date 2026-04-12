@@ -7,8 +7,22 @@ const api = axios.create({
   timeout: 10000,
 });
 
-export async function initiateUpload({ fileName, fileSize, mimeType, sessionId, expiryMode = 'presence' }) {
-  const { data } = await api.post('/upload', { fileName, fileSize, mimeType, sessionId, expiryMode });
+export async function initiateUpload({
+  fileName,
+  fileSize,
+  mimeType,
+  sessionId,
+  expiryMode = 'presence',
+  expirySeconds,
+}) {
+  const { data } = await api.post('/upload', {
+    fileName,
+    fileSize,
+    mimeType,
+    sessionId,
+    expiryMode,
+    ...(expirySeconds ? { expirySeconds } : {}),
+  });
   return data;
 }
 
