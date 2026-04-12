@@ -1,10 +1,12 @@
 import axios from 'axios';
 
 const BASE_URL = import.meta.env.VITE_API_URL || '';
+const DEFAULT_API_TIMEOUT_MS = 10_000;
+const COMPLETE_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 
 const api = axios.create({
   baseURL: `${BASE_URL}/api`,
-  timeout: 10000,
+  timeout: DEFAULT_API_TIMEOUT_MS,
 });
 
 export async function initiateUpload({
@@ -27,7 +29,11 @@ export async function initiateUpload({
 }
 
 export async function completeUpload(fileId, sessionId, parts = []) {
-  const { data } = await api.post(`/upload/${fileId}/complete`, { sessionId, parts });
+  const { data } = await api.post(
+    `/upload/${fileId}/complete`,
+    { sessionId, parts },
+    { timeout: COMPLETE_UPLOAD_TIMEOUT_MS }
+  );
   return data;
 }
 
