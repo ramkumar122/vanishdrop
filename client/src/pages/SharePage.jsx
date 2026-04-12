@@ -51,7 +51,7 @@ function ExpiryBadge({ file }) {
 
 export default function SharePage() {
   const { shareId } = useParams();
-  const { connected, status, on, emit, joinRoom } = useSocket();
+  const { connected, status, on, emit, joinRoom, sessionId } = useSocket();
   const [shareData, setShareData] = useState(null);
   const [events, setEvents] = useState([]);
   const [loadState, setLoadState] = useState('loading');
@@ -92,15 +92,54 @@ export default function SharePage() {
       return undefined;
     }
 
+    const baseUrl = import.meta.env.VITE_API_URL || '';
+    let closeRequestSent = false;
+
+    function notifyPageClose(event) {
+      if (event?.persisted) {
+        return;
+      }
+
+      if (closeRequestSent || !sessionId) {
+        return;
+      }
+
+      closeRequestSent = true;
+      const payload = JSON.stringify({ sessionId });
+      const closeUrl = `${baseUrl}/api/presence/close`;
+
+      if (typeof navigator.sendBeacon === 'function') {
+        const blob = new Blob([payload], { type: 'application/json' });
+        if (navigator.sendBeacon(closeUrl, blob)) {
+          return;
+        }
+      }
+
+      void fetch(closeUrl, {
+        body: payload,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        keepalive: true,
+        method: 'POST',
+      }).catch(() => {});
+    }
+
     function handleBeforeUnload(e) {
       e.preventDefault();
       e.returnValue = 'Your shared files will be deleted. Are you sure?';
+      notifyPageClose();
       return e.returnValue;
     }
 
     window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [shareData?.hasPresenceFiles]);
+    window.addEventListener('pagehide', notifyPageClose);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', notifyPageClose);
+    };
+  }, [sessionId, shareData?.hasPresenceFiles]);
 
   useEffect(() => {
     if (!shareData?.files?.length) {

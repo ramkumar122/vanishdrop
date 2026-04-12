@@ -7,15 +7,10 @@ const SocketContext = createContext(null);
 function useProvideSocket() {
   const socketRef = useRef(null);
   const [sessionId, setSessionId] = useState(getOrCreateSessionId());
-  const sessionIdRef = useRef(sessionId);
   const [connected, setConnected] = useState(false);
   const [sessionReady, setSessionReady] = useState(false);
   const [sessionError, setSessionError] = useState(null);
   const [status, setStatus] = useState('disconnected'); // 'connected' | 'reconnecting' | 'disconnected'
-
-  useEffect(() => {
-    sessionIdRef.current = sessionId;
-  }, [sessionId]);
 
   useEffect(() => {
     const existingSessionId = getOrCreateSessionId();
@@ -69,42 +64,6 @@ function useProvideSocket() {
 
     return () => {
       socket.disconnect();
-    };
-  }, []);
-
-  useEffect(() => {
-    const baseUrl = import.meta.env.VITE_API_URL || '';
-
-    function notifyPageClose() {
-      const activeSessionId = sessionIdRef.current;
-      if (!activeSessionId) {
-        return;
-      }
-
-      const payload = JSON.stringify({ sessionId: activeSessionId });
-      const closeUrl = `${baseUrl}/api/presence/close`;
-
-      if (typeof navigator.sendBeacon === 'function') {
-        const blob = new Blob([payload], { type: 'application/json' });
-        if (navigator.sendBeacon(closeUrl, blob)) {
-          return;
-        }
-      }
-
-      void fetch(closeUrl, {
-        body: payload,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        keepalive: true,
-        method: 'POST',
-      }).catch(() => {});
-    }
-
-    window.addEventListener('pagehide', notifyPageClose);
-
-    return () => {
-      window.removeEventListener('pagehide', notifyPageClose);
     };
   }, []);
 
