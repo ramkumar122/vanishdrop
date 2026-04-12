@@ -11,7 +11,9 @@ const {
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const config = require('../config');
 
-const MAX_SINGLE_UPLOAD_SIZE = 5 * 1024 * 1024 * 1024; // 5GB
+// Browsers can technically single-PUT files up to S3's 5GB limit, but large
+// uploads are much more reliable when we switch to multipart well before that.
+const MAX_SINGLE_UPLOAD_SIZE = 100 * 1024 * 1024; // 100MB
 const MULTIPART_PART_SIZE = 64 * 1024 * 1024; // 64MB
 
 const s3Config = {
